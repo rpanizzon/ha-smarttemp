@@ -1,0 +1,11 @@
+{
+  "domain": "smarttemp",
+  "name": "SmartTemp",
+  "version": "2.0.0",
+  "documentation": "https://github.com/rpanizzon/ge-smarttemp",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@rpanizzon"],
+  "config_flow": true,
+  "iot_class": "local_push"
+}
