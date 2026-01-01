@@ -2,77 +2,81 @@ import asyncio
 import json
 import logging
 import time
-from .const import (
-    DOMAIN, DEFAULT_PORT, HEARTBEAT_PAYLOAD, 
-    SUB_FRAME_PREFIX, TEMP_SCALE_FACTOR
-)
+from .const import DOMAIN, SUB_FRAME_PREFIX, HEARTBEAT_PAYLOAD
 
 _LOGGER = logging.getLogger(__name__)
 
 class SmartTempHub:
-    def __init__(self, hass, port=DEFAULT_PORT):
+    def __init__(self, hass, port):
         self.hass = hass
         self.port = port
-        self.server = None
         self.coordinator = None
-        self.active_connections = {}  # { mac_address: writer }
-        self._closing = False
+        self.active_connections = {}  # MAC -> writer
+        self.last_seen = {}           # MAC -> timestamp
+        self._server = None
 
     async def start_server(self):
-        """Start the TCP Server."""
-        self.server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
+        """Start the TCP server and the timeout monitor."""
+        self._server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
         _LOGGER.info(f"SmartTemp Server listening on port {self.port}")
-        self.hass.loop.create_task(self.server.serve_forever())
+        
+        # Start background task to monitor device health
+        self.hass.async_create_task(self._check_timeouts())
 
     async def stop_server(self, event=None):
-        """Shutdown the server and close connections."""
-        self._closing = True
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-        for writer in self.active_connections.values():
-            writer.close()
-            await writer.wait_closed()
+        """Stop the TCP server."""
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            _LOGGER.info("SmartTemp Server stopped")
+
+    async def _check_timeouts(self):
+        """Mark devices as unavailable if they stop talking for >65s."""
+        while True:
+            await asyncio.sleep(15)
+            now = time.time()
+            stale_macs = [mac for mac, last in self.last_seen.items() if now - last > 65]
+            
+            for mac in stale_macs:
+                _LOGGER.warning(f"Device {mac} timed out. Removing connection.")
+                self.active_connections.pop(mac, None)
+                self.last_seen.pop(mac, None)
+                if self.coordinator:
+                    self.coordinator.async_update_listeners()
 
     async def handle_client(self, reader, writer):
-        """Handle individual AC controller connections."""
-        addr = writer.get_extra_info('peername')
-        _LOGGER.debug(f"New connection from {addr}")
+        """Handle individual TCP connections from AC controllers."""
+        address = writer.get_extra_info('peername')
+        _LOGGER.debug(f"New connection from {address}")
         
         buffer = ""
-        mac_address = None
+        current_mac = None 
 
         try:
-            while not self._closing:
+            while True:
                 data = await reader.read(4096)
-                if not data:
-                    break
+                if not data: break
                 
                 raw_chunk = data.decode('utf-8', errors='ignore')
                 buffer += raw_chunk
 
-                # 1. Check for known non-JSON frames first
-                # The SUB and __heartbeat__ frames are plain ASCII
-                if buffer.startswith(SUB_FRAME_PREFIX) or buffer.startswith(HEARTBEAT_PAYLOAD):
-                    # TRACE LOG: Only occurs for raw control frames
-                    _LOGGER.debug("[RAW DATA TRACE] Non-JSON frame detected: %s", raw_chunk.strip())
-                    
-                    if buffer.startswith(SUB_FRAME_PREFIX):
-                        lines = buffer.split('\n', 1)
-                        if len(lines) > 1:
-                            mac_address = lines[0].replace(SUB_FRAME_PREFIX, "").strip()
-                            self.active_connections[mac_address] = writer
-                            buffer = lines[1]
-                            _LOGGER.info("Device registered: %s", mac_address)
-                        continue
+                # Trace non-JSON frames (SUB, heartbeats, etc)
+                if not buffer.strip().startswith("{"):
+                    _LOGGER.debug(f"[RAW TRACE] {address}: {raw_chunk.strip()}")
 
-                    if buffer.startswith(HEARTBEAT_PAYLOAD):
-                        buffer = buffer[len(HEARTBEAT_PAYLOAD):]
-                        _LOGGER.debug("Heartbeat handled for %s", mac_address)
-                        continue
+                # 1. Handle Registration (SUB)
+                if buffer.startswith(SUB_FRAME_PREFIX):
+                    lines = buffer.split('\n', 1)
+                    if len(lines) > 1:
+                        current_mac = lines[0].replace(SUB_FRAME_PREFIX, "").strip()
+                        current_mac = "".join(current_mac.split()) # Remove any \r or \n
+                        self.active_connections[current_mac] = writer
+                        self.last_seen[current_mac] = time.time()
+                        buffer = lines[1]
+                        _LOGGER.info(f"Device registered: {current_mac}")
+                    continue
 
                 # 2. Process JSON with Bracket Counting
-                json_found_in_this_chunk = False
                 while "{" in buffer:
                     start_index = buffer.find("{")
                     bracket_count = 0
@@ -84,67 +88,62 @@ class SmartTempHub:
                             json_str = buffer[start_index:i+1]
                             try:
                                 payload = json.loads(json_str)
-                                json_found_in_this_chunk = True
-                                # TRACE LOG: Valid JSON processed
-                                _LOGGER.debug("[JSON TRACE] Decoded payload: %s", json_str)
-                                
+                                msg_mac = payload.get("mac") or current_mac
+                                if msg_mac:
+                                    self.last_seen[msg_mac] = time.time()
+
+                                _LOGGER.debug(f"[JSON TRACE] From {msg_mac}: {json_str[:50]}...")
+
+                                # Respond to time, end-of-packet, OR telemetry updates
+                                if payload.get("cmd") == "time":
+                                    await self.send_command(msg_mac, {"result": "ok"})
+                                    await self.send_command(msg_mac, {
+                                        "local_time": time.strftime("%Y%m%d%H%M"),
+                                        "MsgID": time.strftime("%Y%m%d%H%M%S")
+                                    })
+                                elif payload.get("end") == 1 or "equip_mode" in payload or "coolset" in payload:
+                                    await self.send_command(msg_mac, {"result": "ok"})
+                                    _LOGGER.debug(f"[ACK TRACE] Sent 'ok' to {msg_mac}")
+
                                 if self.coordinator:
                                     self.coordinator.async_set_updated_data(payload)
                                     
                             except json.JSONDecodeError:
-                                _LOGGER.error("Failed to decode fragmented JSON")
+                                _LOGGER.error("JSON fragment invalid, waiting for more data...")
                             
                             buffer = buffer[i+1:].lstrip()
                             break
                     else:
-                        break # Incomplete JSON, wait for next read
-                
-                # 3. Final Fallback: Trace anything else that isn't a known frame or valid JSON
-                if not json_found_in_this_chunk and len(buffer) > 0 and "{" not in buffer:
-                    _LOGGER.debug("[RAW DATA TRACE] Unrecognized or Fragmented Non-JSON: %s", buffer.strip())
-                           
+                        break # Incomplete JSON in buffer
         except Exception as e:
-            _LOGGER.error(f"Error handling SmartTemp client {addr}: {e}")
+            _LOGGER.error(f"Error with {address}: {e}")
         finally:
-            if mac_address and mac_address in self.active_connections:
-                del self.active_connections[mac_address]
+            if current_mac:
+                self.active_connections.pop(current_mac, None)
             writer.close()
             await writer.wait_closed()
 
     async def send_command(self, mac, payload):
-        """Send a JSON payload to the specific device."""
+        """Physical send over the socket."""
         writer = self.active_connections.get(mac)
-        if not writer:
-            _LOGGER.error(f"Cannot send command: Device {mac} not connected")
-            return
-
-        json_cmd = json.dumps(payload) + "\n"
-        writer.write(json_cmd.encode())
-        await writer.drain()
-        
-    import time
+        if not writer: return
+        try:
+            cmd = json.dumps(payload) + "\n"
+            writer.write(cmd.encode())
+            await writer.drain()
+        except Exception as e:
+            _LOGGER.error(f"Send failed to {mac}: {e}")
 
     async def send_smarttemp_command(self, mac, payload):
-        """Executes the two-phase Intent + Commit sequence."""
-        # 1. Generate unique MsgID (timestamp based) [cite: 60, 72]
-        msg_id = time.strftime("%Y%m%d%H%M%S")
-        
-        # Phase 1: Intent Payload
+        """Two-phase command (Intent + Commit)."""
+        # Phase 1: Intent
         intent = payload.copy()
-        intent.update({
-            "mac": mac,
-            "MsgID": msg_id [cite: 72]
-        })
-        
-        # Phase 2: Commit Payload
-        commit = payload.copy()
-        commit.update({
-            "mac": mac,
-            "time": int(time.time()),
-            "end": 1
-        })
-
-        # Send sequence
+        intent.update({"mac": mac, "MsgID": time.strftime("%Y%m%d%H%M%S")})
         await self.send_command(mac, intent)
-        await asyncio.sleep(0.1) # Small gap between phases
+        
+        await asyncio.sleep(0.1)
+        
+        # Phase 2: Commit
+        commit = payload.copy()
+        commit.update({"mac": mac, "time": int(time.time()), "end": 1})
         await self.send_command(mac, commit)
