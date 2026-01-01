@@ -1,4 +1,5 @@
 import logging
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     HVACMode, ClimateEntityFeature, FAN_ON, FAN_OFF
@@ -7,7 +8,7 @@ from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 
 from .const import (
     DOMAIN, MAP_HA_TO_SMARTTEMP, MAP_SMARTTEMP_TO_HA, 
-    TEMP_SCALE_FACTOR, ZONE_ON
+    TEMP_SCALE_FACTOR, ZONE_ON,NEW_DEVICE_SIGNAL, NEW_DEVICE_SIGNAL
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,3 +101,45 @@ class SmartTempAC(ClimateEntity):
 
     async def async_added_to_hass(self):
         self.async_on_remove(self.coordinator.async_add_listener(self.async_write_ha_state))
+        
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Set up the Climate entities."""
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator"]
+    hub = data["hub"]
+
+    # Keep track of MACs we have already added to avoid duplicates
+    known_devices = set()
+
+    def add_new_entities(mac=None):
+        """Callback to add entities when a new MAC is seen."""
+        new_entities = []
+        
+        # If mac is provided, just check that one; otherwise check all in coordinator
+        target_macs = [mac] if mac else coordinator.data.keys() if coordinator.data else []
+
+        for device_mac in target_macs:
+            if device_mac not in known_devices:
+                _LOGGER.info(f"Adding new SmartTemp climate entity for MAC: {device_mac}")
+                new_entities.append(SmartTempAC(coordinator, hub, device_mac))
+                
+                # Logic for zones
+                device_data = coordinator.data.get(device_mac, {})
+                zone_count = device_data.get("zone_no", 0)
+                for i in range(1, zone_count + 1):
+                    new_entities.append(SmartTempZone(coordinator, hub, device_mac, i))
+                
+                known_devices.add(device_mac)
+        
+        if new_entities:
+            async_add_entities(new_entities)
+
+    # 1. Try to add entities that might already be in the coordinator data
+    add_new_entities()
+
+    # 2. Listen for a signal from the coordinator when new data arrives
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, add_new_entities)
+    )

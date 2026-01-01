@@ -4,12 +4,15 @@ DOMAIN = "smarttemp"
 
 # Connection Constants
 DEFAULT_PORT = 2223  # 
-HEARTBEAT_PAYLOAD = "__heartbeat__\n"  # [cite: 5]
+HEARTBEAT_PAYLOAD = "__heartbeat__\n"  
 SUB_FRAME_PREFIX = "SUB"  # [cite: 5]
 
 # Protocol Scaling
-# All temperatures are scaled integers (x10) [cite: 22]
+# All temperatures are scaled integers (x10)
 TEMP_SCALE_FACTOR = 10.0 
+
+# Signal name
+NEW_DEVICE_SIGNAL = "smarttemp_new_device"
 
 # Operating Modes (equip_mode) 
 # Value 0: Off, 1: Heat, 3: Cool, 4: Auto

@@ -52,9 +52,10 @@ class SmartTempHub:
                 buffer += raw_chunk
 
                 # 1. Check for known non-JSON frames first
+                # The SUB and __heartbeat__ frames are plain ASCII
                 if buffer.startswith(SUB_FRAME_PREFIX) or buffer.startswith(HEARTBEAT_PAYLOAD):
-                    # TRACE LOG: Only occurs for raw control frames [cite: 26, 36]
-                    _LOGGER.debug(f"[RAW DATA TRACE] Non-JSON frame detected: {raw_chunk.strip()}")
+                    # TRACE LOG: Only occurs for raw control frames
+                    _LOGGER.debug("[RAW DATA TRACE] Non-JSON frame detected: %s", raw_chunk.strip())
                     
                     if buffer.startswith(SUB_FRAME_PREFIX):
                         lines = buffer.split('\n', 1)
@@ -62,12 +63,12 @@ class SmartTempHub:
                             mac_address = lines[0].replace(SUB_FRAME_PREFIX, "").strip()
                             self.active_connections[mac_address] = writer
                             buffer = lines[1]
-                            _LOGGER.info(f"Device registered: {mac_address} [cite: 28]")
+                            _LOGGER.info("Device registered: %s", mac_address)
                         continue
 
                     if buffer.startswith(HEARTBEAT_PAYLOAD):
                         buffer = buffer[len(HEARTBEAT_PAYLOAD):]
-                        _LOGGER.debug(f"Heartbeat handled for {mac_address} [cite: 36]")
+                        _LOGGER.debug("Heartbeat handled for %s", mac_address)
                         continue
 
                 # 2. Process JSON with Bracket Counting
@@ -84,27 +85,24 @@ class SmartTempHub:
                             try:
                                 payload = json.loads(json_str)
                                 json_found_in_this_chunk = True
-                                # TRACE LOG: Valid JSON processed [cite: 11]
-                                _LOGGER.debug(f"[JSON TRACE] Decoded payload: {json_str}")
+                                # TRACE LOG: Valid JSON processed
+                                _LOGGER.debug("[JSON TRACE] Decoded payload: %s", json_str)
                                 
                                 if self.coordinator:
                                     self.coordinator.async_set_updated_data(payload)
                                     
                             except json.JSONDecodeError:
-                                _LOGGER.error(f"Failed to decode fragmented JSON [cite: 46]")
+                                _LOGGER.error("Failed to decode fragmented JSON")
                             
                             buffer = buffer[i+1:].lstrip()
                             break
                     else:
-                        break # Incomplete JSON, wait for more data [cite: 14]
+                        break # Incomplete JSON, wait for next read
                 
                 # 3. Final Fallback: Trace anything else that isn't a known frame or valid JSON
                 if not json_found_in_this_chunk and len(buffer) > 0 and "{" not in buffer:
-                    _LOGGER.debug(f"[RAW DATA TRACE] Unrecognized or Fragmented Non-JSON: {buffer.strip()}")
-                # TRACE LOG: Raw non-JSON data (Control Frames)
-                if SUB_FRAME_PREFIX in buffer or HEARTBEAT_PAYLOAD in buffer:
-                    _LOGGER.debug(f"[RAW DATA TRACE] Received control frame: {raw_chunk.strip()}")
-
+                    _LOGGER.debug("[RAW DATA TRACE] Unrecognized or Fragmented Non-JSON: %s", buffer.strip())
+                           
         except Exception as e:
             _LOGGER.error(f"Error handling SmartTemp client {addr}: {e}")
         finally:
@@ -142,8 +140,8 @@ class SmartTempHub:
         commit = payload.copy()
         commit.update({
             "mac": mac,
-            "time": int(time.time()), [cite: 67]
-            "end": 1 [cite: 68]
+            "time": int(time.time()),
+            "end": 1
         })
 
         # Send sequence

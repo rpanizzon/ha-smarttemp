@@ -2,6 +2,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from .hub import SmartTempHub
+from .coordinator import SmartTempCoordinator
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)

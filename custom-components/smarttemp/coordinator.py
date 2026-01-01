@@ -1,7 +1,8 @@
 import logging
 from datetime import timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from .const import DOMAIN, TEMP_SCALE_FACTOR
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from .const import DOMAIN, TEMP_SCALE_FACTOR, NEW_DEVICE_SIGNAL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +20,20 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         )
 
     def async_set_updated_data(self, data):
-        """Allow the Hub to push new JSON telemetry into the coordinator."""
+
+        def async_set_updated_data(self, data):
+            mac = data.get("mac")
+            if not mac: return
+
+            is_new = self.data is None or mac not in self.data
+            
+            # ... your existing data update logic ...
+            super().async_set_updated_data(self.data)
+
+            # If this is a brand new MAC address, tell climate.py to check for new entities
+            if is_new:
+                async_dispatcher_send(self.hass, "smarttemp_new_device", mac)
+                
         mac = data.get("mac")
         if not mac:
             return
