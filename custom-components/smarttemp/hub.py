@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timedelta
 from .const import DOMAIN, SUB_FRAME_PREFIX, HEARTBEAT_PAYLOAD
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,18 +93,39 @@ class SmartTempHub:
                                 if msg_mac:
                                     self.last_seen[msg_mac] = time.time()
 
-                                _LOGGER.debug(f"[JSON TRACE] From {msg_mac}: {json_str[:50]}...")
+                                # --- DEFINITIVE TIME/WEATHER HANDSHAKE ---
+                                cmd = payload.get("cmd")
+                                
+                                if cmd == "time":
+                                    # The log shows the response is Local Time 
+                                    # and MsgID is Local Time + 1 hour.
+                                    now = datetime.now()
+                                    future = now + timedelta(hours=1)
+                                    
+                                    time_resp = {
+                                        "local_time": now.strftime("%Y%m%d%H%M"),
+                                        "MsgID": future.strftime("%Y%m%d%H%M%S")
+                                    }
+                                    
+                                    # Cloud sends no spaces and NO newline
+                                    resp_raw = json.dumps(time_resp, separators=(',', ':'))
+                                    writer.write(resp_raw.encode('ascii'))
+                                    await writer.drain()
+                                    _LOGGER.debug(f"Handshake: Sent time to {msg_mac}")
 
-                                # Respond to time, end-of-packet, OR telemetry updates
-                                if payload.get("cmd") == "time":
-                                    await self.send_command(msg_mac, {"result": "ok"})
-                                    await self.send_command(msg_mac, {
-                                        "local_time": time.strftime("%Y%m%d%H%M"),
-                                        "MsgID": time.strftime("%Y%m%d%H%M%S")
-                                    })
-                                elif payload.get("end") == 1 or "equip_mode" in payload or "coolset" in payload:
-                                    await self.send_command(msg_mac, {"result": "ok"})
-                                    _LOGGER.debug(f"[ACK TRACE] Sent 'ok' to {msg_mac}")
+                                elif cmd == "weather":
+                                    # Cloud responds with simple result:ok
+                                    weather_resp = json.dumps({"result": "ok"}, separators=(',', ':'))
+                                    writer.write(weather_resp.encode('ascii'))
+                                    await writer.drain()
+                                    _LOGGER.debug(f"Handshake: Sent weather ACK to {msg_mac}")
+
+                                # Acknowledge standard telemetry (equip_mode/coolset etc)
+                                elif payload.get("end") == 1 or "equip_mode" in payload:
+                                    ack = json.dumps({"result": "ok"}, separators=(',', ':'))
+                                    writer.write(ack.encode('ascii'))
+                                    await writer.drain()
+                                # ------------------------------------------
 
                                 if self.coordinator:
                                     self.coordinator.async_set_updated_data(payload)
@@ -114,8 +136,8 @@ class SmartTempHub:
                             buffer = buffer[i+1:].lstrip()
                             break
                     else:
-                        break # Incomplete JSON in buffer
-        except Exception as e:
+                        break # Incomplete JSON
+                    
             _LOGGER.error(f"Error with {address}: {e}")
         finally:
             if current_mac:
