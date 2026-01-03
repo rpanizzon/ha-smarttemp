@@ -19,25 +19,30 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         self.hub = hub
         self.hass = hass
         self.data = {}  # Store: { "MAC_ADDRESS": { "field": value, ... } }
+        self.discovered_macs = set() # Track discovered devices
 
     async def async_process_json(self, mac, payload):
         """Handle incoming JSON from the Hub."""
         if mac not in self.data:
             self.data[mac] = {}
 
-        # Merge the new payload into our state dictionary
+        # 1. Always merge data so we don't miss status changes
         self.data[mac].update(payload)
 
-        # Always notify listeners that data changed
-        self.async_set_updated_data(self.data)
-
-        # TRIGGER DISCOVERY
-        # We signal climate.py to create entities if 'pair_key' is present
-        # This ensures zone_no and equip_mode are available before entities exist.
+        # 2. Extract specific fields from pair_key if present
         if "pair_key" in payload:
-            _LOGGER.info("Full hardware profile for %s received. Triggering discovery.", mac)
-            async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, mac)
+            _LOGGER.debug("Processing identity/config data for %s", mac)
+            # You can add logic here to explicitly parse zone names if provided in JSON
 
+        # 3. Only signal DISCOVERY if this is the first time we see pair_key
+        if "pair_key" in payload and mac not in self.discovered_macs:
+            _LOGGER.info("First-time discovery for %s. Signaling platforms.", mac)
+            self.discovered_macs.add(mac)
+            async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, mac)
+        else:
+            # Standard update for existing entities
+            self.async_set_updated_data(self.data)
+            
     def get_field(self, mac, field, default=None):
         """Safe fetch for raw fields (handles lists automatically)."""
         val = self.data.get(mac, {}).get(field, default)

@@ -3,30 +3,55 @@ from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, Sen
 from homeassistant.const import UnitOfTemperature, PERCENTAGE
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
-from .const import DOMAIN
+from homeassistant.helpers.dispatcher import async_dispatcher_connect # Missing import added
+from .const import DOMAIN, NEW_DEVICE_SIGNAL
 
 _LOGGER = logging.getLogger(__name__)
 
-
 async def async_setup_entry(hass, entry, async_add_entities):
+    """Set up SmartTemp sensors."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
+    known_devices = set()
 
-    entities = []
-    for mac in coordinator.data:
-        # Main Controller Sensors
-        entities.append(
-            SmartTempTempSensor(coordinator, entry.entry_id, mac, "dis_room_temp", "Main Temperature")
-        )
-        entities.append(SmartTempHumiditySensor(coordinator, entry.entry_id, mac))
+    def add_new_sensors(mac=None):
+        """Callback to add sensors when pair_key is received."""
+        
+        # Define a small internal function to actually do the adding
+        async def _async_add():
+            new_entities = []
+            target_macs = [mac] if mac else [
+                m for m, d in coordinator.data.items() if "pair_key" in d
+            ]
 
-        # Zone Sensors
-        zone_count = coordinator.data[mac].get("zone_no", 0)
-        for i in range(zone_count):
-            entities.append(SmartTempZoneTempSensor(coordinator, entry.entry_id, mac, i))
+            for device_mac in target_macs:
+                if device_mac not in known_devices:
+                    _LOGGER.info("Registering sensors for %s", device_mac)
+                    
+                    # Main Sensors
+                    new_entities.append(SmartTempTempSensor(coordinator, entry.entry_id, device_mac, "dis_room_temp", "Main Temperature"))
+                    new_entities.append(SmartTempHumiditySensor(coordinator, entry.entry_id, device_mac))
+                    
+                    # Zone Sensors
+                    zone_count = coordinator.data[device_mac].get("zone_no", 0)
+                    if isinstance(zone_count, list): zone_count = zone_count[0]
+                    for i in range(zone_count):
+                        new_entities.append(SmartTempZoneTempSensor(coordinator, entry.entry_id, device_mac, i))
 
-    async_add_entities(entities)
+                    known_devices.add(device_mac)
 
+            if new_entities:
+                # REMOVE 'await' here. async_add_entities handles the scheduling.
+                _LOGGER.info("Adding %d sensors to Home Assistant", len(new_entities))
+                async_add_entities(new_entities)
+
+        # Ensure this is wrapped in add_job to stay on the MainThread
+        hass.add_job(_async_add())            
+            
+    # Listen for discovery signal
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, add_new_sensors)
+    )
 
 class SmartTempTempSensor(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -83,8 +108,7 @@ class SmartTempHumiditySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        val = self.coordinator.get_field(self._mac, "dis_room_humi")
-        return val / 10.0 if val is not None else None
+        return self.coordinator.get_humidity(self._mac)
 
     
 class SmartTempFanPolicySensor(CoordinatorEntity, SensorEntity):

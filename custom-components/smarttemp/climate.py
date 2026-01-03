@@ -23,7 +23,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up the Climate entities."""
     data = hass.data[DOMAIN][entry.entry_id]
@@ -31,50 +30,42 @@ async def async_setup_entry(hass, entry, async_add_entities):
     hub = data["hub"]
     known_devices = set()
 
-    async def async_add_new_entities(mac=None):
-        """Triggered by the dispatcher when pair_key is received."""
-        new_entities = []
-        # Only process MACs that have sent their pair_key info
-        target_macs = [mac] if mac else [
-            m for m, d in coordinator.data.items() if "pair_key" in d
-        ]
+    def add_new_entities(mac=None):
+        async def _async_task():
+            new_entities = []
+            target_macs = [mac] if mac else [
+                m for m, d in coordinator.data.items() if "pair_key" in d
+            ]
 
-        for device_mac in target_macs:
-            # Use a unique identifier for the set of entities for this MAC
-            if f"{device_mac}_registered" not in known_devices:
-                _LOGGER.info("Triggering discovery via pair_key for %s", device_mac)
+            for device_mac in target_macs:
+                if f"{device_mac}_climate_reg" not in known_devices:
+                    _LOGGER.info("Triggering discovery for %s", device_mac)
+                    
+                    # FIX: Match the arguments to what SmartTempAC expects
+                    # Check your SmartTempAC.__init__ definition. 
+                    # If it requires entry_id, it should be:
+                    new_entities.append(SmartTempAC(coordinator, hub, entry.entry_id, device_mac))
+                    
+                    device_data = coordinator.data.get(device_mac, {})
+                    zone_count = device_data.get("zone_no", 0)
+                    if isinstance(zone_count, list): zone_count = zone_count[0]
+                    
+                    for i in range(zone_count):
+                        # FIX: Match arguments for SmartTempZone as well
+                        new_entities.append(SmartTempZone(coordinator, hub, entry.entry_id, device_mac, i))
+                    
+                    known_devices.add(f"{device_mac}_climate_reg")
 
-                # 1. Add Main Controller
-                new_entities.append(SmartTempAC(coordinator, entry.entry_id, hub, device_mac))
+            if new_entities:
+                # Use the provided callback directly without 'await' 
+                # inside the job wrapper for thread safety
+                async_add_entities(new_entities)
 
-                # 2. Add Zones based on the now-guaranteed zone_no
-                device_data = coordinator.data.get(device_mac, {})
-                zone_count = device_data.get("zone_no", 0)
+        hass.add_job(_async_task())
 
-                # Handle potential list wrap [8] vs 8
-                if isinstance(zone_count, list):
-                    zone_count = zone_count[0] if zone_count else 0
-
-                for i in range(zone_count):
-                    _LOGGER.info("Creating zone %d for %s", i + 1, device_mac)
-                    new_entities.append(SmartTempZone(coordinator, entry.entry_id, hub, device_mac, i))
-
-                # Mark this entire hardware set as registered
-                known_devices.add(f"{device_mac}_registered")
-
-        if new_entities:
-            async_add_entities(new_entities)
-
-    # Listen for the signal from the Coordinator
-    entry.async_on_unload(
-        async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_new_entities)
-    )
-
-    # Initial check for devices already discovered by the Hub
-    if coordinator.data:
-        await async_add_new_entities()
-
-
+    # Check for already identified devices
+    add_new_entities()
+    
 class SmartTempBase(CoordinatorEntity, ClimateEntity):
     """Base class for SmartTemp climate entities."""
     _attr_has_entity_name = True
