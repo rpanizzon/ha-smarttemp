@@ -41,9 +41,14 @@ Early development
         
 ### Functionality / To-Do 
 See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a coplete list of know issues/requests.
- - [ ] Add full dictionary of Names
- - [ ] Fix Fan control
- - [ ] Manage Zones
+ - Climate
+    - [ ] Add Zone Names and ?
+    _ { } Muti Zone on/off -check logic
+    - [ ] Multi zone - no Current Temperature
+    - [ ] no temperature set
+    - [ ] no autoofftime
+ - Sensors
+    - [ ] multi zone - no temperature or humididty per zone
  - [ ] Update Documentation
  -     [ ]  Readme
  -     [ ]  Protocol Document
