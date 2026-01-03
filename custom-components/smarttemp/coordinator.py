@@ -83,10 +83,17 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         except (TypeError, ValueError):
             return None
 
-    def get_zone_temp(self, mac, zone_idx):
-        """Specifically extracts index from dis_zonetemp array."""
-        val = self.data.get(mac, {}).get("dis_zonetemp")
-        if isinstance(val, list) and len(val) > zone_idx:
-            zone_val = val[zone_idx]
-            return float(zone_val) / 10.0 if zone_val is not None else None
-        return None
+    def get_zone_temp(self, mac, idx):
+        """Fetcher for the 'dis_zonetemp' array with safety checks."""
+        data = self.data.get(mac, {})
+        val = data.get("dis_zonetemp")
+    
+        # Check if dis_zonetemp exists, is a list, and has the required index
+        if not isinstance(val, list) or len(val) <= idx:
+            return None
+            
+        try:
+            # Convert raw hardware value (e.g., 225) to float (22.5)
+            return float(val[idx]) / 10.0
+        except (TypeError, ValueError):
+            return None
