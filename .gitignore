@@ -4,3 +4,7 @@ Documentation/Dictionary.xlsx
 *.xlsx
 Forwarder/smarttemp_handshake.log
 Forwarder/.DS_Store
+Documentation/Dictionary.xlsx
+custom-components/smarttemp/climate.py.old.py
+custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
+custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
