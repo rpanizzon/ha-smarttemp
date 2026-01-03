@@ -2,3 +2,5 @@ Documentation/Dictionary.xlsx
 Documentation/.DS_Store
 Documentation/Dictionary.xlsx
 *.xlsx
+Forwarder/smarttemp_handshake.log
+Forwarder/.DS_Store
