@@ -12,24 +12,28 @@ SUB_FRAME_PREFIX = b"SUB "
 class SmartTempHub:
     """The Socket Hub handling raw TCP communication with controllers."""
 
-    def __init__(self, hass, port, coordinator):
+    def __init__(self, hass, port, coordinator=None):
         self.hass = hass
         self.port = port
         self.coordinator = coordinator
         self.active_connections = {}  # MAC: writer
         self.server = None
+        self._serve_task = None
 
-    async def start(self):
+    async def start_server(self):
         """Start the TCP Server."""
         self.server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
-        _LOGGER.info(f"SmartTemp Server started on port {self.port}")
-        asyncio.create_task(self.server.serve_forever())
+        _LOGGER.info("SmartTemp Server started on port %s", self.port)
+        self._serve_task = asyncio.create_task(self.server.serve_forever())
 
-    async def stop(self):
+    async def stop_server(self):
         """Stop the TCP Server."""
         if self.server:
             self.server.close()
             await self.server.wait_closed()
+        if self._serve_task:
+            self._serve_task.cancel()
+            self._serve_task = None
 
     async def handle_client(self, reader, writer):
         """Main connection handler."""
@@ -102,10 +106,13 @@ class SmartTempHub:
         except Exception as err:
             _LOGGER.error(f"Connection error for {address}: {err}")
         finally:
-            if current_mac in self.active_connections:
-                del self.active_connections[current_mac]
-            writer.close()
-            await writer.wait_closed()
+            if current_mac:
+                self.active_connections.pop(current_mac, None)
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                _LOGGER.debug("Error closing connection for %s", address)
 
     async def process_payload(self, mac, payload, writer):
         """Filter protocol noise vs state data."""

@@ -5,10 +5,10 @@ from .const import DOMAIN, NEW_DEVICE_SIGNAL
 
 _LOGGER = logging.getLogger(__name__)
 
-class SmartTempDataCoordinator(DataUpdateCoordinator):
+class SmartTempCoordinator(DataUpdateCoordinator):
     """Class to manage fetching SmartTemp data from the Hub."""
 
-    def __init__(self, hass):
+    def __init__(self, hass, hub=None):
         """Initialize the coordinator."""
         super().__init__(
             hass,
@@ -16,6 +16,8 @@ class SmartTempDataCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             # No update_interval because the Hub pushes data to us
         )
+        self.hub = hub
+        self.hass = hass
         self.data = {}  # Store: { "MAC_ADDRESS": { "field": value, ... } }
 
     async def async_process_json(self, mac, payload):
@@ -26,15 +28,15 @@ class SmartTempDataCoordinator(DataUpdateCoordinator):
         # Merge the new payload into our state dictionary
         self.data[mac].update(payload)
 
+        # Always notify listeners that data changed
+        self.async_set_updated_data(self.data)
+
         # TRIGGER DISCOVERY
-        # We only signal climate.py to create entities if 'pair_key' is present
+        # We signal climate.py to create entities if 'pair_key' is present
         # This ensures zone_no and equip_mode are available before entities exist.
         if "pair_key" in payload:
-            _LOGGER.info(f"Full hardware profile for {mac} received. Triggering discovery.")
+            _LOGGER.info("Full hardware profile for %s received. Triggering discovery.", mac)
             async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, mac)
-        else:
-            # Standard update: Tell existing entities that data has changed
-            self.async_set_updated_data(self.data)
 
     def get_field(self, mac, field, default=None):
         """Safe fetch for raw fields (handles lists automatically)."""

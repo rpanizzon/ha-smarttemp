@@ -10,44 +10,51 @@ _LOGGER = logging.getLogger(__name__)
 # List of platforms to support
 PLATFORMS = ["climate", "sensor"]
 
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SmartTemp from a config entry."""
-    
-    # 1. Get the port from the configuration entry (defaults to 2223)
+
     port = entry.data.get("port", 2223)
-    
-    # 2. Initialize the Hub (TCP Server)
+
     hub = SmartTempHub(hass, port=port)
-    
-    # 3. Initialize the Coordinator (State Manager)
     coordinator = SmartTempCoordinator(hass, hub)
-    
-    # 4. Link them: Hub needs coordinator to push data; 
-    # Coordinator needs hub to send commands.
     hub.coordinator = coordinator
 
-    # 5. Start the TCP Server
-    await hub.start_server()
+    # Start the TCP server and handle startup errors cleanly
+    try:
+        await hub.start_server()
+    except Exception as err:  # broad except to avoid breaking HA on unexpected errors
+        _LOGGER.exception("Failed to start SmartTemp hub: %s", err)
+        return False
 
-    # Store for platform (climate.py) access
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "hub": hub,
         "coordinator": coordinator,
     }
 
-    # 6. Forward to platforms (Update this once climate.py is ready)
-    await hass.config_entries.async_forward_entry_setups(entry, ["climate"])
+    # Forward setup to all supported platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register shutdown
-    entry.async_on_unload(hub.stop_server)
+    # Ensure the hub is stopped when the config entry is unloaded
+    entry.async_on_unload(lambda: hass.async_create_task(hub.stop_server()))
+
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hub = hass.data[DOMAIN].pop(entry.entry_id)
-        await hub.stop_server()
-        
+
+    if unload_ok and stored:
+        hub = stored.get("hub")
+        try:
+            if hub:
+                await hub.stop_server()
+        except Exception:
+            _LOGGER.exception("Error stopping SmartTemp hub for %s", entry.entry_id)
+        # Remove stored data
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+
     return unload_ok
