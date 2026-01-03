@@ -4,7 +4,8 @@ import datetime
 import sys
 
 LISTEN_PORT = 2223
-REMOTE = ("27.131.76.20", 2223)
+# REMOTE = ("27.131.76.20", 2223)
+REMOTE = ("192.168.0.30", 2223)
 LOG_FILE = "smarttemp_handshake.log"
 
 class Logger:
