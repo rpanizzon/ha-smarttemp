@@ -4,20 +4,18 @@ Home Assistant custom component that creates an alterante server to the cloud ba
 This was developed by analysing the tcp traffic between the smarttemp controller and the cloud based server.
 Note, this integration replaces the cloud based server with Home Assistant, making the Smarttemp app unable to access the controller and therefore unusable. Use Home Assistant app instead.
 
-This integration requests all devices linked to your Smart Temp account and automatically adds them into Home Assistant.
 
 ## Features
 - Local TCP control
 - Per-zone climate entities
 - No cloud dependency
 - Home Assistant handles scheduling
-
-
 **This is a work-in-progress!** 
 
-## Setup
+## Protocol
 
-The Inspire Touch AC control unit communicates with . Once you've created an account and can successfully control the unit from the app, you can use your login details with this integration. 
+## Setup
+You must have a local DNS installed to redirec the controller(s) to Home Assistant
 The recommended appoach is to use a local DNS such as Adguard or Pi-Hole and redirect "smarttempapp.com.au" to Home Assistant.
 
 ## Installation
@@ -30,7 +28,7 @@ The recommended appoach is to use a local DNS such as Adguard or Pi-Hole and red
       username: "username"
       password: "password"
 ### Restart HA
-Once you've complete the above steps, restart Home Assistant. Once restarted, ???.
+Once you've complete the above steps, restart Home Assistant. Once restarted, You should see entries appear in the integration. There should be 1 entry per zone/controller.
 
 ## Status
 Early development
@@ -42,15 +40,14 @@ Early development
 
         
 ### Functionality / To-Do 
-See the [Projects board](https://github.com/users/rpanizzon/smarttemp) for updated list.
- - [ ] HTTP: Get Websocket status and API Key.
- - [ ] WS: Login using API Key.
- - [ ] Obtain ongoing status for each Inspire Touch Controller
- - [ ] Change setting on Unit:
- -     [ ]  Switch unit on and off
- -     [ ]  Set Mode
- -     [ ]  Set Temperature
- -     [ ]  Set Zone
+See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a coplete list of know issues/requests.
+ - [ ] Add full dictionary of Names
+ - [ ] Fix Fan control
+ - [ ] Manage Zones
+ - [ ] Update Documentation
+ -     [ ]  Readme
+ -     [ ]  Protocol Document
+
 
 
  
