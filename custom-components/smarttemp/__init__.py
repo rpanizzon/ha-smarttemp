@@ -7,8 +7,8 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# List of platforms to support (we'll add climate once the hub is tested)
-PLATFORMS = []
+# List of platforms to support
+PLATFORMS = ["climate", "sensor"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SmartTemp from a config entry."""

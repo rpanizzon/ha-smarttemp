@@ -1,171 +1,166 @@
 import asyncio
 import json
 import logging
-import time
 from datetime import datetime, timedelta
-from .const import DOMAIN, SUB_FRAME_PREFIX, HEARTBEAT_PAYLOAD
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from .const import DOMAIN, NEW_DEVICE_SIGNAL
 
 _LOGGER = logging.getLogger(__name__)
 
+SUB_FRAME_PREFIX = b"SUB "
+
 class SmartTempHub:
-    def __init__(self, hass, port):
+    """The Socket Hub handling raw TCP communication with controllers."""
+
+    def __init__(self, hass, port, coordinator):
         self.hass = hass
         self.port = port
-        self.coordinator = None
-        self.active_connections = {}  # MAC -> writer
-        self.last_seen = {}           # MAC -> timestamp
-        self._server = None
+        self.coordinator = coordinator
+        self.active_connections = {}  # MAC: writer
+        self.server = None
 
-    async def start_server(self):
-        """Start the TCP server and the timeout monitor."""
-        self._server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
-        _LOGGER.info(f"SmartTemp Server listening on port {self.port}")
-        
-        # Start background task to monitor device health
-        self.hass.async_create_task(self._check_timeouts())
+    async def start(self):
+        """Start the TCP Server."""
+        self.server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
+        _LOGGER.info(f"SmartTemp Server started on port {self.port}")
+        asyncio.create_task(self.server.serve_forever())
 
-    async def stop_server(self, event=None):
-        """Stop the TCP server."""
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            _LOGGER.info("SmartTemp Server stopped")
-
-    async def _check_timeouts(self):
-        """Mark devices as unavailable if they stop talking for >65s."""
-        while True:
-            await asyncio.sleep(15)
-            now = time.time()
-            stale_macs = [mac for mac, last in self.last_seen.items() if now - last > 65]
-            
-            for mac in stale_macs:
-                _LOGGER.warning(f"Device {mac} timed out. Removing connection.")
-                self.active_connections.pop(mac, None)
-                self.last_seen.pop(mac, None)
-                if self.coordinator:
-                    self.coordinator.async_update_listeners()
+    async def stop(self):
+        """Stop the TCP Server."""
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
 
     async def handle_client(self, reader, writer):
-        """Handle individual TCP connections from AC controllers."""
+        """Main connection handler."""
         address = writer.get_extra_info('peername')
-        _LOGGER.debug(f"New connection from {address}")
+        _LOGGER.info(f"New connection from {address}")
         
-        buffer = ""
-        current_mac = None 
+        current_mac = None
+        buffer = b""
 
         try:
+            # 1. Handshake Phase: Wait for SUB command
             while True:
-                data = await reader.read(4096)
-                if not data: break
+                data = await reader.read(1024)
+                if not data:
+                    return
+                buffer += data
                 
-                raw_chunk = data.decode('utf-8', errors='ignore')
-                buffer += raw_chunk
+                if buffer.startswith(SUB_FRAME_PREFIX) and b"\x0a" in buffer:
+                    line_end = buffer.find(b"\x0a")
+                    line = buffer[:line_end].decode('ascii').strip()
+                    current_mac = line.split()[1]
+                    
+                    # Store connection for outgoing commands
+                    self.active_connections[current_mac] = writer
+                    
+                    # Immediate definitive handshake (Time + Weather)
+                    await self.send_protocol_response(writer, "handshake")
+                    
+                    # Advance buffer past the SUB line
+                    buffer = buffer[line_end+1:]
+                    _LOGGER.info(f"Handshake complete for MAC: {current_mac}")
+                    break
 
-                # Trace non-JSON frames (SUB, heartbeats, etc)
-                if not buffer.strip().startswith("{"):
-                    _LOGGER.debug(f"[RAW TRACE] {address}: {raw_chunk.strip()}")
+            # 2. Operational Phase: JSON Processing loop
+            while True:
+                data = await reader.read(1024)
+                if not data:
+                    break
+                buffer += data
 
-                # 1. Handle Registration (SUB)
-                if buffer.startswith(SUB_FRAME_PREFIX):
-                    lines = buffer.split('\n', 1)
-                    if len(lines) > 1:
-                        current_mac = lines[0].replace(SUB_FRAME_PREFIX, "").strip()
-                        current_mac = "".join(current_mac.split()) # Remove any \r or \n
-                        self.active_connections[current_mac] = writer
-                        self.last_seen[current_mac] = time.time()
-                        buffer = lines[1]
-                        _LOGGER.info(f"Device registered: {current_mac}")
-                    continue
-
-                # 2. Process JSON with Bracket Counting
-                while "{" in buffer:
-                    start_index = buffer.find("{")
+                # Bracket counting for cross-packet reassembly
+                while b"{" in buffer:
+                    start_index = buffer.find(b"{")
                     bracket_count = 0
+                    json_found = False
+                    
                     for i in range(start_index, len(buffer)):
-                        if buffer[i] == "{": bracket_count += 1
-                        elif buffer[i] == "}": bracket_count -= 1
+                        if buffer[i] == ord("{"):
+                            bracket_count += 1
+                        elif buffer[i] == ord("}"):
+                            bracket_count -= 1
                         
                         if bracket_count == 0:
-                            json_str = buffer[start_index:i+1]
+                            # Full JSON object reassembled
+                            json_bytes = buffer[start_index:i+1]
                             try:
-                                payload = json.loads(json_str)
-                                msg_mac = payload.get("mac") or current_mac
-                                if msg_mac:
-                                    self.last_seen[msg_mac] = time.time()
-
-                                # --- DEFINITIVE TIME/WEATHER HANDSHAKE ---
-                                cmd = payload.get("cmd")
-                                
-                                if cmd == "time":
-                                    # The log shows the response is Local Time 
-                                    # and MsgID is Local Time + 1 hour.
-                                    now = datetime.now()
-                                    future = now + timedelta(hours=1)
-                                    
-                                    time_resp = {
-                                        "local_time": now.strftime("%Y%m%d%H%M"),
-                                        "MsgID": future.strftime("%Y%m%d%H%M%S")
-                                    }
-                                    
-                                    # Cloud sends no spaces and NO newline
-                                    resp_raw = json.dumps(time_resp, separators=(',', ':'))
-                                    writer.write(resp_raw.encode('ascii'))
-                                    await writer.drain()
-                                    _LOGGER.debug(f"Handshake: Sent time to {msg_mac}")
-
-                                elif cmd == "weather":
-                                    # Cloud responds with simple result:ok
-                                    weather_resp = json.dumps({"result": "ok"}, separators=(',', ':'))
-                                    writer.write(weather_resp.encode('ascii'))
-                                    await writer.drain()
-                                    _LOGGER.debug(f"Handshake: Sent weather ACK to {msg_mac}")
-
-                                # Acknowledge standard telemetry (equip_mode/coolset etc)
-                                elif payload.get("end") == 1 or "equip_mode" in payload:
-                                    ack = json.dumps({"result": "ok"}, separators=(',', ':'))
-                                    writer.write(ack.encode('ascii'))
-                                    await writer.drain()
-                                # ------------------------------------------
-
-                                if self.coordinator:
-                                    self.coordinator.async_set_updated_data(payload)
-                                    
+                                payload = json.loads(json_bytes.decode('utf-8'))
+                                await self.process_payload(current_mac, payload, writer)
                             except json.JSONDecodeError:
-                                _LOGGER.error("JSON fragment invalid, waiting for more data...")
+                                _LOGGER.error(f"Malformed JSON from {current_mac}")
                             
-                            buffer = buffer[i+1:].lstrip()
+                            buffer = buffer[i+1:]
+                            json_found = True
                             break
-                    else:
-                        break # Incomplete JSON
                     
-            _LOGGER.error(f"Error with {address}: {e}")
+                    if not json_found:
+                        # Fragmented JSON; wait for more data
+                        break
+
+        except Exception as err:
+            _LOGGER.error(f"Connection error for {address}: {err}")
         finally:
-            if current_mac:
-                self.active_connections.pop(current_mac, None)
+            if current_mac in self.active_connections:
+                del self.active_connections[current_mac]
             writer.close()
             await writer.wait_closed()
 
-    async def send_command(self, mac, payload):
-        """Physical send over the socket."""
-        writer = self.active_connections.get(mac)
-        if not writer: return
+    async def process_payload(self, mac, payload, writer):
+        """Filter protocol noise vs state data."""
+        
+        # 1. Handle Protocol Heartbeats (Internal reply)
+        if "heartbeat" in payload or "hb" in payload:
+            await self.send_protocol_response(writer, "heartbeat")
+            return
+
+        # 2. Handle Protocol Time/Weather Requests
+        if "get_time" in payload or "get_weather" in payload:
+            await self.send_protocol_response(writer, "handshake")
+            return
+
+        # 3. Route state/config data to Coordinator
+        # This includes "pair_key" which triggers discovery
+        await self.coordinator.async_process_json(mac, payload)
+
+    async def send_protocol_response(self, writer, resp_type):
+        """Send standardized JSON responses for protocol maintenance."""
+        now = datetime.now()
+        
+        if resp_type == "handshake":
+            data = {
+                "local_time": now.strftime("%Y%m%d%H%M"),
+                "MsgID": (now + timedelta(hours=1)).strftime("%Y%m%d%H%M%S"),
+                "weather_code": 1,
+                "out_temp": 220,
+                "out_humi": 450,
+                "day1_high": 260,
+                "day1_low": 140,
+                "day1_weather": 1
+            }
+        else:  # Heartbeat ACK
+            data = {"heartbeat": "ok", "time": now.strftime("%Y%m%d%H%M%S")}
+
         try:
-            cmd = json.dumps(payload) + "\n"
-            writer.write(cmd.encode())
+            resp = json.dumps(data, separators=(',', ':')).encode('ascii')
+            writer.write(resp)
             await writer.drain()
         except Exception as e:
-            _LOGGER.error(f"Send failed to {mac}: {e}")
+            _LOGGER.error(f"Failed to send {resp_type}: {e}")
 
-    async def send_smarttemp_command(self, mac, payload):
-        """Two-phase command (Intent + Commit)."""
-        # Phase 1: Intent
-        intent = payload.copy()
-        intent.update({"mac": mac, "MsgID": time.strftime("%Y%m%d%H%M%S")})
-        await self.send_command(mac, intent)
-        
-        await asyncio.sleep(0.1)
-        
-        # Phase 2: Commit
-        commit = payload.copy()
-        commit.update({"mac": mac, "time": int(time.time()), "end": 1})
-        await self.send_command(mac, commit)
+    async def send_smarttemp_command(self, mac, cmd_dict):
+        """Send a command from HA to the controller."""
+        if mac not in self.active_connections:
+            _LOGGER.error(f"Cannot send command: {mac} not connected")
+            return
+
+        writer = self.active_connections[mac]
+        try:
+            # Most SmartTemp controllers expect a MsgID in commands too
+            cmd_dict["MsgID"] = datetime.now().strftime("%Y%m%d%H%M%S")
+            payload = json.dumps(cmd_dict, separators=(',', ':')).encode('ascii')
+            writer.write(payload)
+            await writer.drain()
+        except Exception as e:
+            _LOGGER.error(f"Error sending command to {mac}: {e}")
