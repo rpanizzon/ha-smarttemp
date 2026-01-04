@@ -86,41 +86,60 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
 
     @property
     def extra_state_attributes(self):
+        """Definitive mapping of variables including damper status."""
         data = self.coordinator.data.get(self._mac, {})
+        
+        # Global attributes for both Zoned and Non-Zoned
         attrs = {
             "system_time": f"{data.get('hour')}:{data.get('min')}",
             "filter_days": data.get("filter_days"),
             "error_code": data.get("err_code"),
-            "heat_status": "On" if data.get("heat_status") == 1 else "Off",
-            "cool_status": "On" if data.get("cool_status") == 1 else "Off",
+            "heat_status": "Active" if data.get("heat_status") == 1 else "Idle",
+            "cool_status": "Active" if data.get("cool_status") == 1 else "Idle",
             "fan_speed_raw": data.get("fan_speed"),
         }
 
         if self._is_dummy:
+            # Master/Non-Zoned specific data
             attrs.update({
                 "target_heat_setpoint": self.coordinator.get_temp(self._mac, "heatset"),
                 "target_cool_setpoint": self.coordinator.get_temp(self._mac, "coolset"),
                 "program_enabled": "Manual" if data.get("progen") == 0 else "Program",
+                "auto_off_time": data.get("autoofftime"),
             })
         else:
+            # Zoned specific status including Damper position
+            # Hardware field zoneX_status: 1=Open, 0=Closed
+            damper_raw = data.get(f"zone{self._zone_num}_status")
             attrs.update({
-                "zone_on_off": "On" if data.get(f"zone{self._zone_num}:onoff") == 1 else "Off",
+                "zone_power": "On" if data.get(f"zone{self._zone_num}:onoff") == 1 else "Off",
+                "damper_status": "Open" if damper_raw == 1 else "Closed",
+                "zone_index": self._zone_idx,
             })
         return attrs
-
+    
     @property
     def hvac_mode(self):
+        """If zone is off, mode is off. If zone is on, mode follows system."""
         if not self._is_dummy:
+            # Check individual zone power
             status = self.coordinator.get_field(self._mac, f"zone{self._zone_num}:onoff", 0)
-            if status == 0: return HVACMode.OFF
+            if status == 0:
+                return HVACMode.OFF
+
+        # If master or zone is on, return system mode
         mode = self.coordinator.get_field(self._mac, "equip_mode", 0)
         return MAP_SMARTTEMP_TO_HA.get(mode, HVACMode.OFF)
 
     @property
     def hvac_action(self):
-        if self.hvac_mode == HVACMode.OFF: return HVACAction.OFF
-        if self.coordinator.get_field(self._mac, "heat_status") == 1: return HVACAction.HEATING
-        if self.coordinator.get_field(self._mac, "cool_status") == 1: return HVACAction.COOLING
+        """Shows what the system is actually doing right now."""
+        if self.hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        if self.coordinator.get_field(self._mac, "heat_status") == 1:
+            return HVACAction.HEATING
+        if self.coordinator.get_field(self._mac, "cool_status") == 1:
+            return HVACAction.COOLING
         return HVACAction.IDLE
 
     @property
@@ -156,16 +175,43 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         await self.hub.send_smarttemp_command(self._mac, {"fan_mode": val})
         
     async def async_set_hvac_mode(self, hvac_mode):
-        if hvac_mode == HVACMode.OFF and self._is_zoned:
+        """Set HVAC mode based on zoned or non-zoned logic."""
+        # Non-Zoned Controller Logic
+        if not self._is_zoned:
+            st_mode = MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)
+            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": st_mode})
+            return
+
+        # Zoned Controller Logic
+        if hvac_mode == HVACMode.OFF:
+            # 1. Turn off this specific zone
             await self.hub.send_smarttemp_command(self._mac, {f"zone{self._zone_num}:onoff": 0})
-        elif self._is_zoned:
+            
+            # 2. Check if all other zones are now off to shut down the main unit
+            other_zones_active = False
+            zone_count = self.coordinator.data.get(self._mac, {}).get("zone_no", 0)
+            if isinstance(zone_count, list): zone_count = zone_count[0]
+
+            for i in range(1, zone_count + 1):
+                if i == self._zone_num:
+                    continue
+                # Check status of other zones from coordinator data
+                if self.coordinator.get_field(self._mac, f"zone{i}:onoff") == 1:
+                    other_zones_active = True
+                    break
+            
+            if not other_zones_active:
+                _LOGGER.info("All zones off, setting equip_mode to 0 for %s", self._mac)
+                await self.hub.send_smarttemp_command(self._mac, {"equip_mode": 0})
+        
+        else:
+            # Turning a zone ON to Heat/Cool/Auto
+            st_mode = MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)
             await self.hub.send_smarttemp_command(self._mac, {
                 f"zone{self._zone_num}:onoff": 1,
-                "equip_mode": MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)
+                "equip_mode": st_mode
             })
-        else:
-            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)})
-
+            
     async def async_set_temperature(self, **kwargs):
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp:
