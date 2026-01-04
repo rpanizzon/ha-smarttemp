@@ -40,15 +40,17 @@ Early development
 
         
 ### Functionality / To-Do 
-See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a coplete list of know issues/requests.
+See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a complete list of know issues/requests.
  - Climate
-    - [ ] Add Zone Names and ?
-    _ { } Muti Zone on/off -check logic
-    - [ ] Multi zone - no Current Temperature
+    - [ ] Fix Time issues
+    - [ ] is hub processing time and weather commands?
+    _ [ ] Check out malformed JSON
     - [ ] no temperature set
+    - [ ] fix commands to fan
+    _ [ ] rationalise entities
     - [ ] no autoofftime
  - Sensors
-    - [ ] multi zone - no temperature or humididty per zone
+    - [ ] 
  - [ ] Update Documentation
  -     [ ]  Readme
  -     [ ]  Protocol Document
