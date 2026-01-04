@@ -79,8 +79,10 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         self._attr_fan_modes = [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
         self._attr_supported_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE | 
-            ClimateEntityFeature.FAN_MODE
+            ClimateEntityFeature.FAN_MODE |
+            ClimateEntityFeature.PRESET_MODE
         )
+        self._attr_preset_modes = ["Auto Fan", "Continuous Fan"]
 
     @property
     def extra_state_attributes(self):
@@ -131,12 +133,28 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
     def current_temperature(self):
         if self._is_dummy: return self.coordinator.get_room_temp(self._mac)
         return self.coordinator.get_zone_temp(self._mac, self._zone_idx)
+    
+    @property
+    def current_humidity(self):
+        """Displays humidity on the climate card using your working coordinator helper."""
+        return self.coordinator.get_humidity(self._mac)
 
     @property
     def target_temperature(self):
         field = "set_temp" if self._is_dummy else f"zone{self._zone_num}_set"
         return self.coordinator.get_temp(self._mac, field)
 
+    @property
+    def preset_mode(self):
+        """Maps the 'fan_mode' field (0/1) from your doc to a readable preset."""
+        policy = self.coordinator.get_field(self._mac, "fan_mode", 0)
+        return "Continuous Fan" if policy == 1 else "Auto Fan"
+
+    async def async_set_preset_mode(self, preset_mode: str):
+        """Sends the command to toggle between Auto and Continuous fan."""
+        val = 1 if preset_mode == "Continuous Fan" else 0
+        await self.hub.send_smarttemp_command(self._mac, {"fan_mode": val})
+        
     async def async_set_hvac_mode(self, hvac_mode):
         if hvac_mode == HVACMode.OFF and self._is_zoned:
             await self.hub.send_smarttemp_command(self._mac, {f"zone{self._zone_num}:onoff": 0})
