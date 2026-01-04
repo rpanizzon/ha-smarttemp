@@ -73,7 +73,9 @@ class SmartTempTempSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        # Use the standard get_temp for room_temp
+        # FIX: For the main sensor, use get_room_temp to handle the [244, 0, 0, 0] format 
+        if self._field == "dis_room_temp":
+            return self.coordinator.get_room_temp(self._mac)
         return self.coordinator.get_temp(self._mac, self._field)
 
 
@@ -108,9 +110,9 @@ class SmartTempHumiditySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
+        # Uses dis_room_humi[0] 
         return self.coordinator.get_humidity(self._mac)
 
-    
 class SmartTempFanPolicySensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, entry_id, mac):
         super().__init__(coordinator)
