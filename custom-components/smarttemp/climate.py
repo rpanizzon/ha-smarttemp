@@ -168,11 +168,6 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         """Maps the 'fan_mode' field (0/1) from your doc to a readable preset."""
         policy = self.coordinator.get_field(self._mac, "fan_mode", 0)
         return "Continuous Fan" if policy == 1 else "Auto Fan"
-
-    async def async_set_preset_mode(self, preset_mode: str):
-        """Sends the command to toggle between Auto and Continuous fan."""
-        val = 1 if preset_mode == "Continuous Fan" else 0
-        await self.hub.send_smarttemp_command(self._mac, {"fan_mode": val})
         
     async def async_set_hvac_mode(self, hvac_mode):
         """Set HVAC mode based on zoned or non-zoned logic."""
@@ -212,8 +207,36 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
                 "equip_mode": st_mode
             })
             
+    async def async_set_fan_mode(self, fan_mode):
+        """Set new target fan mode."""
+        # Mapping HA constants to hardware integers (0:Auto, 1:Low, 2:Med, 3:High)
+        mapping = {
+            FAN_AUTO: 0,
+            FAN_LOW: 1,
+            FAN_MEDIUM: 2,
+            FAN_HIGH: 3
+        }
+        val = mapping.get(fan_mode, 0)
+        _LOGGER.debug("Setting fan mode to %s (value: %s)", fan_mode, val)
+        await self.hub.send_smarttemp_command(self._mac, {"fan_status": val})
+
     async def async_set_temperature(self, **kwargs):
+        """Set new target temperature."""
         temp = kwargs.get(ATTR_TEMPERATURE)
-        if temp:
-            field = "set_temp" if not self._is_zoned else f"zone{self._zone_num}_set"
-            await self.hub.send_smarttemp_command(self._mac, {field: int(temp * 10)})
+        if temp is None:
+            return
+
+        # Determine if we are updating a specific zone or the master unit
+        field = "set_temp" if self._is_dummy else f"zone{self._zone_num}_set"
+        
+        # Hardware expects temperature * 10 (e.g., 21.0 -> 210)
+        target_value = int(float(temp) * 10)
+        
+        _LOGGER.debug("Setting temperature for %s to %s", field, target_value)
+        await self.hub.send_smarttemp_command(self._mac, {field: target_value})
+
+    async def async_set_preset_mode(self, preset_mode):
+        """Set new target preset mode (Fan Policy)."""
+        # Mapping: Continuous Fan = 1, Auto Fan = 0
+        val = 1 if preset_mode == "Continuous Fan" else 0
+        await self.hub.send_smarttemp_command(self._mac, {"fan_mode": val})
