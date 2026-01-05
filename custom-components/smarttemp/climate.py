@@ -217,8 +217,8 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             FAN_HIGH: 3
         }
         val = mapping.get(fan_mode, 0)
-        _LOGGER.debug("Setting fan mode to %s (value: %s)", fan_mode, val)
-        await self.hub.send_smarttemp_command(self._mac, {"fan_status": val})
+        _LOGGER.debug("Setting fan speed to %s (value: %s)", fan_mode, val)
+        await self.hub.send_smarttemp_command(self._mac, {"fan_speed": val})
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
