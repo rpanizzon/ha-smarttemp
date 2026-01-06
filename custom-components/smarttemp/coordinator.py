@@ -83,8 +83,6 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         else:
             # Use the 'Zone' temp list
             val = device_data.get("dis_zone_temp")[zone_idx-1]
-        
-        _LOGGER.debug(f"Temp call from {mac} Zone {zone_idx}: Value of val= {val}")
         return val if val else 0
 
     def get_room_humidity(self, mac, zone_idx):

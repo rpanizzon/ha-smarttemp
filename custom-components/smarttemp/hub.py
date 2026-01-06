@@ -167,7 +167,7 @@ class SmartTempHub:
             # Most SmartTemp controllers expect a MsgID in commands too
             cmd_dict["MsgID"] = datetime.now().strftime("%Y%m%d%H%M%S")
             payload = json.dumps(cmd_dict, separators=(',', ':')).encode('ascii')
-            _LOGGER.debug("Command Sent:{payload}")
+            _LOGGER.debug(f"Command Sent:{payload}")
             writer.write(payload)
             await writer.drain()
         except Exception as e:

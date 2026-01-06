@@ -63,7 +63,6 @@ class SmartTempTemperatureSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Request temperature for the specific zone index."""
         raw = self.coordinator.get_room_temp(self._mac, self._zone_idx)
-        _LOGGER.debug(f"Temperature for {self._mac} and Zone {self._zone_idx} is {raw}")
         if raw is not None and raw != -1000:
             return float(raw) / TEMP_SCALE_FACTOR
         return None
