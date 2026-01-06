@@ -78,6 +78,16 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         return None
 
     @property
+    def extra_state_attributes(self):
+        """Return device-specific state attributes."""
+        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
+        return {
+            "program_enable": self.coordinator.get_field(self._mac, f"{parent_key}:progen"),
+            "override_time": self.coordinator.get_field(self._mac, f"{parent_key}:ovrdtime"),
+            "auto_off_time": self.coordinator.get_field(self._mac, f"{parent_key}:autoofftime"),
+        }
+    
+    @property
     def name(self):
         """Return 'SmartTemp System' for Guest or the hardware name for Lounge zones."""
         if self._zone_idx == 0:
