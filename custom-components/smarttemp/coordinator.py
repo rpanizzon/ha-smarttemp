@@ -79,22 +79,15 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         
         if zone_idx == 0:
             # Use 'System' room temp list
-            val = device_data.get("dis_room_temp")
-            _LOGGER.debug(f"Temp call from {mac} using index 0 from {val}")
-            return val[0] if val else 0
+            val = device_data.get("dis_room_temp")[0]
         else:
             # Use the 'Zone' temp list
-            val = device_data.get("dis_zone_temp")
-            _LOGGER.debug(f"Temp call from {mac} Zone {zone_idx} from {val}")
-            return val[zone_idx-1] if val and len(val) > zone_idx else 0
+            val = device_data.get("dis_zone_temp")[zone_idx-1]
+        
+        _LOGGER.debug(f"Temp call from {mac} Zone {zone_idx}: Value of val= {val}")
+        return val if val else 0
 
     def get_room_humidity(self, mac, zone_idx):
-        """Guest uses index 0, Lounge uses index 1+ from dis_room_humi."""
+        """Although a list, there is only 1 humidity element. Zones 2 onward get same as zone 1."""
         val = self.data.get(mac, {}).get("dis_room_humi")
-        
-        if zone_idx == 0:
-            _LOGGER.debug(f"Humidity call from {mac} using index 0 from {val}")
-            return val[0] if val else 0
-        else:
-            _LOGGER.debug(f"Humidity call from {mac} Zone {zone_idx} from {val}")
-            return val[zone_idx-1] if val and len(val) > zone_idx else 0
+        return val[0] if val else 0

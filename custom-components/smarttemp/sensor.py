@@ -96,6 +96,4 @@ class SmartTempHumiditySensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Uses the consolidated get_room_humidity from coordinator."""
-        hum = self.coordinator.get_room_humidity(self._mac, self._zone_idx)
-        _LOGGER.debug(f"Humidity for {self._mac} and zone_idx {self._zone_idx} is {hum}")
-        return hum
+        return self.coordinator.get_room_humidity(self._mac, self._zone_idx)
