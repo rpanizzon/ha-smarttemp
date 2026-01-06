@@ -55,7 +55,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, mac)}, name=f"SmartTemp {mac}")
         
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
-        self._attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.AUTO]
+        self._attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
         self._attr_fan_modes = [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
         self._attr_supported_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE | 
@@ -113,9 +113,16 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
 
     @property
     def hvac_mode(self):
+        """Report current mode from hardware."""
         mode_val = self.coordinator.get_field(self._mac, "equip_mode")
-        mapping = {0: HVACMode.OFF, 1: HVACMode.HEAT, 2: HVACMode.COOL, 3: HVACMode.AUTO}
+        # Ensure the mapping matches the commands: 0=Off, 1=Heat, 3=Cool, 4=Auto (heat_cool for dual sliders)
+        mapping = {0: HVACMode.OFF, 1: HVACMode.HEAT, 3: HVACMode.COOL, 4: HVACMode.HEAT_COOL}
         return mapping.get(mode_val, HVACMode.OFF)
+
+    @property
+    def hvac_modes(self):
+        """List of available modes."""
+        return [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
 
     @property
     def fan_mode(self):
@@ -139,11 +146,13 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
 
     @property
     def target_temperature(self):
-        """Single slider fallback for HEAT/COOL modes."""
+        """Single slider fallback for HEAT/COOL modes, None for range modes."""
+        if self.hvac_mode == HVACMode.HEAT_COOL:
+            return None  # This forces the UI to use the High/Low sliders
         if self.hvac_mode == HVACMode.COOL:
             return self.target_temperature_high
         return self.target_temperature_low
-
+    
     @property
     def min_temp(self):
         raw = self.coordinator.get_field(self._mac, "temp_min")
@@ -155,12 +164,21 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
 
     async def async_set_hvac_mode(self, hvac_mode):
-        mapping = {HVACMode.OFF: 0, HVACMode.HEAT: 1, HVACMode.COOL: 2, HVACMode.AUTO: 3}
+        """Set HVAC mode (equip_mode) for the system."""
+        # Based on your feedback: Off=0, Heat=1, Cool=3, Auto=4 (Heat_Cool)
+        mapping = {
+            HVACMode.OFF: 0,
+            HVACMode.HEAT: 1,
+            HVACMode.COOL: 3,
+            HVACMode.HEAT_COOL: 4 
+        }
         val = mapping.get(hvac_mode, 0)
+        
+        # The hub's send_smarttemp_command will automatically append the MsgID
         await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
 
     async def async_set_temperature(self, **kwargs):
-        """Pack payload with the inverse of TEMP_SCALE_FACTOR."""
+        """Pack temperature payload for non-zoned device (Zone 0)."""
         temp_low = kwargs.get("target_temp_low") or self.target_temperature_low
         temp_high = kwargs.get("target_temp_high") or self.target_temperature_high
         
@@ -170,7 +188,8 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             else:
                 temp_high = temp
 
-        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
+        # For non-zoned, parent_key is always sys_set
+        parent_key = "sys_set"
         
         payload = {
             parent_key: {
@@ -182,10 +201,6 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             }
         }
         
-        # Always force zone ON when interacting with it (Lounge)
-        if self._zone_idx > 0:
-            payload[parent_key]["onoff"] = 1
-
         await self.hub.send_smarttemp_command(self._mac, payload)
         
     async def async_set_fan_mode(self, fan_mode):
