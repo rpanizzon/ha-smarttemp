@@ -1,212 +1,183 @@
 import logging
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
-    HVACMode,
     ClimateEntityFeature,
+    HVACMode,
     FAN_AUTO,
     FAN_LOW,
     FAN_MEDIUM,
     FAN_HIGH,
-    HVACAction
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import (
-    DOMAIN,
-    MAP_HA_TO_SMARTTEMP,
-    MAP_SMARTTEMP_TO_HA,
-    NEW_DEVICE_SIGNAL
-)
+from .const import DOMAIN, NEW_DEVICE_SIGNAL, TEMP_SCALE_FACTOR
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
-    hub = data["hub"]
-    known_devices = set()
+    """Set up SmartTemp entities via discovery signal."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
 
-    def add_new_entities(mac=None):
-        async def _async_task():
-            new_entities = []
-            target_macs = [mac] if mac else [m for m, d in coordinator.data.items() if "pair_key" in d]
+    def async_add_smarttemp_entity(discovery_info):
+        """Callback when coordinator signals (mac, zone_idx)."""
+        mac, zone_idx = discovery_info
+        
+        _LOGGER.info("Adding entity for MAC %s Index %s", mac, zone_idx)
+        
+        # Create the entity object
+        new_entity = SmartTempZone(coordinator, hub, entry.entry_id, mac, zone_idx)
+        
+        # FIX: Use hass.add_job to ensure async_add_entities runs in the correct loop context
+        hass.add_job(async_add_entities, [new_entity])
 
-            for device_mac in target_macs:
-                if device_mac not in known_devices:
-                    device_data = coordinator.data.get(device_mac, {})
-                    zone_count = device_data.get("zone_no", 0)
-                    if isinstance(zone_count, list): zone_count = zone_count[0]
-
-                    if zone_count == 0:
-                        # Use SmartTempZone with is_dummy=True for master controllers
-                        new_entities.append(SmartTempZone(coordinator, hub, entry.entry_id, device_mac, 0, is_dummy=True))
-                    else:
-                        for i in range(zone_count):
-                            new_entities.append(SmartTempZone(coordinator, hub, entry.entry_id, device_mac, i, is_dummy=False))
-                    
-                    known_devices.add(device_mac)
-
-            if new_entities:
-                async_add_entities(new_entities)
-
-        hass.add_job(_async_task())
-
-    entry.async_on_unload(async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, add_new_entities))
-    add_new_entities()
+    # Listen for signals
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_smarttemp_entity)
+    )
 
 class SmartTempZone(CoordinatorEntity, ClimateEntity):
-    def __init__(self, coordinator, hub, entry_id, mac, zone_idx, is_dummy=False):
+    """Climate entity for a specific Zone (1-N) or System (0)."""
+
+    def __init__(self, coordinator, hub, entry_id, mac, zone_idx):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.hub = hub
         self._mac = mac
-        self._zone_idx = zone_idx
-        self._zone_num = zone_idx + 1
-        self._is_dummy = is_dummy
-        self._is_zoned = not is_dummy # Added to fix missing attribute
-
-        self._attr_unique_id = f"{entry_id}_{mac}_zone_{zone_idx}"
+        self._zone_idx = zone_idx  # 0=System (Guest), 1+=Actual Zones (Lounge)
         
-        raw_name = self.coordinator.get_field(self._mac, f"zone{self._zone_num}_name")
-        self._attr_name = raw_name if (not is_dummy and raw_name) else "SmartTemp AC"
-        
+        # Unique ID based on Mac + Index
+        suffix = "system" if zone_idx == 0 else f"zone_{zone_idx}"
+        self._attr_unique_id = f"{entry_id}_{mac}_{suffix}"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, mac)}, name=f"SmartTemp {mac}")
+        
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.AUTO]
         self._attr_fan_modes = [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
         self._attr_supported_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE | 
+            ClimateEntityFeature.TARGET_TEMPERATURE_RANGE | 
             ClimateEntityFeature.FAN_MODE |
             ClimateEntityFeature.PRESET_MODE
         )
         self._attr_preset_modes = ["Auto Fan", "Continuous Fan"]
 
-    @property
-    def extra_state_attributes(self):
-        """Definitive mapping of variables including damper status."""
-        data = self.coordinator.data.get(self._mac, {})
+    def _get_hardware_temp(self, sub_field):
+        """Helper to fetch nested values and apply TEMP_SCALE_FACTOR."""
+        parent = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
+        raw_val = self.coordinator.get_field(self._mac, f"{parent}:{sub_field}")
         
-        # Global attributes for both Zoned and Non-Zoned
-        attrs = {
-            "system_time": f"{data.get('hour')}:{data.get('min')}",
-            "filter_days": data.get("filter_days"),
-            "error_code": data.get("err_code"),
-            "heat_status": "Active" if data.get("heat_status") == 1 else "Idle",
-            "cool_status": "Active" if data.get("cool_status") == 1 else "Idle",
-            "fan_speed_raw": data.get("fan_speed"),
-        }
+        try:
+            if raw_val is not None and raw_val != -1000:
+                return float(raw_val) / TEMP_SCALE_FACTOR
+        except (TypeError, ValueError):
+            pass
+        return None
 
-        if self._is_dummy:
-            # Master/Non-Zoned specific data
-            attrs.update({
-                "target_heat_setpoint": self.coordinator.get_temp(self._mac, "heatset"),
-                "target_cool_setpoint": self.coordinator.get_temp(self._mac, "coolset"),
-                "program_enabled": "Manual" if data.get("progen") == 0 else "Program",
-                "auto_off_time": data.get("autoofftime"),
-            })
-        else:
-            # Zoned specific status including Damper position
-            # Hardware field zoneX_status: 1=Open, 0=Closed
-            damper_raw = data.get(f"zone{self._zone_num}_status")
-            attrs.update({
-                "zone_power": "On" if data.get(f"zone{self._zone_num}:onoff") == 1 else "Off",
-                "damper_status": "Open" if damper_raw == 1 else "Closed",
-                "zone_index": self._zone_idx,
-            })
-        return attrs
-    
+    @property
+    def name(self):
+        """Return 'SmartTemp System' for Guest or the hardware name for Lounge zones."""
+        if self._zone_idx == 0:
+            return "SmartTemp System"
+        name_field = f"zone{self._zone_idx}_name"
+        return self.coordinator.get_field(self._mac, name_field) or f"Zone {self._zone_idx}"
+
+    @property
+    def current_temperature(self):
+        """Fetch temperature using the coordinator's agnostic helper."""
+        # This calls get_room_temp(mac, zone_idx) which handles the routing
+        raw = self.coordinator.get_room_temp(self._mac, self._zone_idx)
+        
+        if raw is not None and raw != -1000:
+            return float(raw) / TEMP_SCALE_FACTOR
+        return None
+
+    @property
+    def current_humidity(self):
+        """Fetch humidity using the coordinator's agnostic helper."""
+        # Passing zone_idx allows coordinator to pick index 0 or index n-1
+        return self.coordinator.get_room_humidity(self._mac, self._zone_idx)
+
     @property
     def hvac_mode(self):
-        """If zone is off, mode is off. If zone is on, mode follows system."""
-        if not self._is_dummy:
-            # Check individual zone power
-            status = self.coordinator.get_field(self._mac, f"zone{self._zone_num}:onoff", 0)
-            if status == 0:
-                return HVACMode.OFF
-
-        # If master or zone is on, return system mode
-        mode = self.coordinator.get_field(self._mac, "equip_mode", 0)
-        return MAP_SMARTTEMP_TO_HA.get(mode, HVACMode.OFF)
-
-    @property
-    def hvac_action(self):
-        """Shows what the system is actually doing right now."""
-        if self.hvac_mode == HVACMode.OFF:
-            return HVACAction.OFF
-        if self.coordinator.get_field(self._mac, "heat_status") == 1:
-            return HVACAction.HEATING
-        if self.coordinator.get_field(self._mac, "cool_status") == 1:
-            return HVACAction.COOLING
-        return HVACAction.IDLE
+        mode_val = self.coordinator.get_field(self._mac, "equip_mode")
+        mapping = {0: HVACMode.OFF, 1: HVACMode.HEAT, 2: HVACMode.COOL, 3: HVACMode.AUTO}
+        return mapping.get(mode_val, HVACMode.OFF)
 
     @property
     def fan_mode(self):
         val = self.coordinator.get_field(self._mac, "fan_status", 0)
         mapping = {0: FAN_AUTO, 1: FAN_LOW, 2: FAN_MEDIUM, 3: FAN_HIGH}
         return mapping.get(val, FAN_AUTO)
-
-    @property
-    def current_temperature(self):
-        if self._is_dummy: return self.coordinator.get_room_temp(self._mac)
-        return self.coordinator.get_zone_temp(self._mac, self._zone_idx)
     
-    @property
-    def current_humidity(self):
-        """Displays humidity on the climate card using your working coordinator helper."""
-        return self.coordinator.get_humidity(self._mac)
-
-    @property
-    def target_temperature(self):
-        field = "set_temp" if self._is_dummy else f"zone{self._zone_num}_set"
-        return self.coordinator.get_temp(self._mac, field)
-
     @property
     def preset_mode(self):
         """Maps the 'fan_mode' field (0/1) from your doc to a readable preset."""
         policy = self.coordinator.get_field(self._mac, "fan_mode", 0)
         return "Continuous Fan" if policy == 1 else "Auto Fan"
-        
+    
+    @property
+    def target_temperature_low(self):
+        return self._get_hardware_temp("heatset")
+
+    @property
+    def target_temperature_high(self):
+        return self._get_hardware_temp("coolset")
+
+    @property
+    def target_temperature(self):
+        """Single slider fallback for HEAT/COOL modes."""
+        if self.hvac_mode == HVACMode.COOL:
+            return self.target_temperature_high
+        return self.target_temperature_low
+
+    @property
+    def min_temp(self):
+        raw = self.coordinator.get_field(self._mac, "temp_min")
+        return float(raw) / TEMP_SCALE_FACTOR if raw else 18.0
+
+    @property
+    def max_temp(self):
+        raw = self.coordinator.get_field(self._mac, "temp_max")
+        return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
+
     async def async_set_hvac_mode(self, hvac_mode):
-        """Set HVAC mode based on zoned or non-zoned logic."""
-        # Non-Zoned Controller Logic
-        if not self._is_zoned:
-            st_mode = MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)
-            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": st_mode})
-            return
+        mapping = {HVACMode.OFF: 0, HVACMode.HEAT: 1, HVACMode.COOL: 2, HVACMode.AUTO: 3}
+        val = mapping.get(hvac_mode, 0)
+        await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
 
-        # Zoned Controller Logic
-        if hvac_mode == HVACMode.OFF:
-            # 1. Turn off this specific zone
-            await self.hub.send_smarttemp_command(self._mac, {f"zone{self._zone_num}:onoff": 0})
-            
-            # 2. Check if all other zones are now off to shut down the main unit
-            other_zones_active = False
-            zone_count = self.coordinator.data.get(self._mac, {}).get("zone_no", 0)
-            if isinstance(zone_count, list): zone_count = zone_count[0]
-
-            for i in range(1, zone_count + 1):
-                if i == self._zone_num:
-                    continue
-                # Check status of other zones from coordinator data
-                if self.coordinator.get_field(self._mac, f"zone{i}:onoff") == 1:
-                    other_zones_active = True
-                    break
-            
-            if not other_zones_active:
-                _LOGGER.info("All zones off, setting equip_mode to 0 for %s", self._mac)
-                await self.hub.send_smarttemp_command(self._mac, {"equip_mode": 0})
+    async def async_set_temperature(self, **kwargs):
+        """Pack payload with the inverse of TEMP_SCALE_FACTOR."""
+        temp_low = kwargs.get("target_temp_low") or self.target_temperature_low
+        temp_high = kwargs.get("target_temp_high") or self.target_temperature_high
         
-        else:
-            # Turning a zone ON to Heat/Cool/Auto
-            st_mode = MAP_HA_TO_SMARTTEMP.get(hvac_mode, 0)
-            await self.hub.send_smarttemp_command(self._mac, {
-                f"zone{self._zone_num}:onoff": 1,
-                "equip_mode": st_mode
-            })
-            
+        if temp := kwargs.get(ATTR_TEMPERATURE):
+            if self.hvac_mode == HVACMode.HEAT:
+                temp_low = temp
+            else:
+                temp_high = temp
+
+        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
+        
+        payload = {
+            parent_key: {
+                "heatset": int(temp_low * TEMP_SCALE_FACTOR),
+                "coolset": int(temp_high * TEMP_SCALE_FACTOR),
+                "progen": self.coordinator.get_field(self._mac, f"{parent_key}:progen", 0),
+                "ovrdtime": self.coordinator.get_field(self._mac, f"{parent_key}:ovrdtime", 0),
+                "autoofftime": self.coordinator.get_field(self._mac, f"{parent_key}:autoofftime", -1)
+            }
+        }
+        
+        # Always force zone ON when interacting with it (Lounge)
+        if self._zone_idx > 0:
+            payload[parent_key]["onoff"] = 1
+
+        await self.hub.send_smarttemp_command(self._mac, payload)
+        
     async def async_set_fan_mode(self, fan_mode):
         """Set new target fan mode."""
         # Mapping HA constants to hardware integers (0:Auto, 1:Low, 2:Med, 3:High)
@@ -219,21 +190,6 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         val = mapping.get(fan_mode, 0)
         _LOGGER.debug("Setting fan speed to %s (value: %s)", fan_mode, val)
         await self.hub.send_smarttemp_command(self._mac, {"fan_speed": val})
-
-    async def async_set_temperature(self, **kwargs):
-        """Set new target temperature."""
-        temp = kwargs.get(ATTR_TEMPERATURE)
-        if temp is None:
-            return
-
-        # Determine if we are updating a specific zone or the master unit
-        field = "set_temp" if self._is_dummy else f"zone{self._zone_num}_set"
-        
-        # Hardware expects temperature * 10 (e.g., 21.0 -> 210)
-        target_value = int(float(temp) * 10)
-        
-        _LOGGER.debug("Setting temperature for %s to %s", field, target_value)
-        await self.hub.send_smarttemp_command(self._mac, {field: target_value})
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode (Fan Policy)."""
