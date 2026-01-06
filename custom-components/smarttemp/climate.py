@@ -113,12 +113,18 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
 
     @property
     def hvac_mode(self):
-        """Report current mode from hardware."""
+        """Report mode based on global system state and local zone state."""
+        # If this is a zone and it is off, report OFF regardless of system mode
+        if self._zone_idx > 0:
+            on_off = self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:onoff")
+            if on_off == 0:
+                return HVACMode.OFF
+
+        # Otherwise, report the global system mode
         mode_val = self.coordinator.get_field(self._mac, "equip_mode")
-        # Ensure the mapping matches the commands: 0=Off, 1=Heat, 3=Cool, 4=Auto (heat_cool for dual sliders)
         mapping = {0: HVACMode.OFF, 1: HVACMode.HEAT, 3: HVACMode.COOL, 4: HVACMode.HEAT_COOL}
         return mapping.get(mode_val, HVACMode.OFF)
-
+    
     @property
     def hvac_modes(self):
         """List of available modes."""
@@ -164,32 +170,51 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
 
     async def async_set_hvac_mode(self, hvac_mode):
-        """Set HVAC mode (equip_mode) for the system."""
-        # Based on your feedback: Off=0, Heat=1, Cool=3, Auto=4 (Heat_Cool)
-        mapping = {
-            HVACMode.OFF: 0,
-            HVACMode.HEAT: 1,
-            HVACMode.COOL: 3,
-            HVACMode.HEAT_COOL: 4 
-        }
-        val = mapping.get(hvac_mode, 0)
+        """Set HVAC mode with specific controller power logic."""
         
-        # The hub's send_smarttemp_command will automatically append the MsgID
-        await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
+        # 1. Handle Turning OFF
+        if hvac_mode == HVACMode.OFF:
+            if self._zone_idx == 0:
+                # Non-Zoned: Turn off the main controller
+                await self.hub.send_smarttemp_command(self._mac, {"equip_mode": 0})
+            else:
+                # Zoned: Only turn off this specific zone
+                parent_key = f"zone{self._zone_idx}"
+                await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 0}})
+            return
+
+        # 2. Handle Turning ON / Changing Modes
+        # First: Update the main controller mode
+        mapping = {
+            HVACMode.HEAT: 1, 
+            HVACMode.COOL: 3, 
+            HVACMode.HEAT_COOL: 4
+        }
+        val = mapping.get(hvac_mode)
+        
+        if val is not None:
+            # Update global system mode (e.g., to Heat or Cool)
+            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
+
+        # Second: If it's a zone, ensure the zone is turned ON
+        if self._zone_idx > 0:
+            parent_key = f"zone{self._zone_idx}"
+            await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 1}})
 
     async def async_set_temperature(self, **kwargs):
-        """Pack temperature payload for non-zoned device (Zone 0)."""
+        """Pack temperature payload using zone-specific keys."""
         temp_low = kwargs.get("target_temp_low") or self.target_temperature_low
         temp_high = kwargs.get("target_temp_high") or self.target_temperature_high
         
+        # Handle single slider setpoint
         if temp := kwargs.get(ATTR_TEMPERATURE):
             if self.hvac_mode == HVACMode.HEAT:
                 temp_low = temp
             else:
                 temp_high = temp
 
-        # For non-zoned, parent_key is always sys_set
-        parent_key = "sys_set"
+        # Determine if we use 'sys_set' (Guest) or 'zoneX' (Lounge)
+        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
         
         payload = {
             parent_key: {
@@ -201,6 +226,10 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             }
         }
         
+        # Explicitly include 'onoff' for Lounge zones to match hardware requirements
+        if self._zone_idx > 0:
+            payload[parent_key]["onoff"] = 1
+
         await self.hub.send_smarttemp_command(self._mac, payload)
         
     async def async_set_fan_mode(self, fan_mode):
