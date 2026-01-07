@@ -41,17 +41,17 @@ Early development
         
 ### Functionality / To-Do 
 See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a complete list of know issues/requests.
+ - Hub
+     - [ ] Fix Time issues
+     - [ ] is hub processing time and weather commands?
+ - Coordinator
+     - [ ] Turn Controller off when all zones are off
+
  - Climate
-    - [ ] Fix Time issues
-    - [ ] is hub processing time and weather commands?
-    _ [ ] Check out malformed JSON
-    - [ ] no temperature set
-    - [ ] fix commands to fan
-    _ [ ] rationalise entities
-    - [ ] no autoofftime
+    - [ ] autoofftime, progen and ovrtime 
  - Sensors
     - [ ] 
- - [ ] Update Documentation
+ - ocumentation
  -     [ ]  Readme
  -     [ ]  Protocol Document
 
