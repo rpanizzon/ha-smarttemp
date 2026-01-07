@@ -170,38 +170,42 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
 
     async def async_set_hvac_mode(self, hvac_mode):
-        """Set HVAC mode with specific controller power logic."""
+        """Set HVAC mode using a single combined JSON payload."""
         
         # 1. Handle Turning OFF
         if hvac_mode == HVACMode.OFF:
             if self._zone_idx == 0:
-                # Non-Zoned: Turn off the main controller
                 await self.hub.send_smarttemp_command(self._mac, {"equip_mode": 0})
             else:
-                # Zoned: Only turn off this specific zone
                 parent_key = f"zone{self._zone_idx}"
                 await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 0}})
-                # Ask coordinator to check if the whole system should turn off
-                await self.coordinator.check_and_shutdown_system(self._mac)
+                # await self.coordinator.check_and_shutdown_system(self._mac)
             return
 
         # 2. Handle Turning ON / Changing Modes
-        # First: Update the main controller mode
-        mapping = {
-            HVACMode.HEAT: 1, 
-            HVACMode.COOL: 3, 
-            HVACMode.HEAT_COOL: 4
-        }
+        mapping = {HVACMode.HEAT: 1, HVACMode.COOL: 3, HVACMode.HEAT_COOL: 4}
         val = mapping.get(hvac_mode)
         
         if val is not None:
-            # Update global system mode (e.g., to Heat or Cool)
-            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
-
-        # Second: If it's a zone, ensure the zone is turned ON
-        if self._zone_idx > 0:
-            parent_key = f"zone{self._zone_idx}"
-            await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 1}})
+            if self._zone_idx == 0:
+                # Guest / Non-Zoned: Just the mode
+                await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
+            else:
+                # Lounge / Zoned: COMBINED PAYLOAD
+                parent_key = f"zone{self._zone_idx}"
+                payload = {
+                    "equip_mode": val,
+                    parent_key: {
+                        "onoff": 1,
+                        "heatset": int(self.target_temperature_low * TEMP_SCALE_FACTOR),
+                        "coolset": int(self.target_temperature_high * TEMP_SCALE_FACTOR),
+                        "progen": self.coordinator.get_field(self._mac, f"{parent_key}:progen", 0),
+                        "ovrdtime": self.coordinator.get_field(self._mac, f"{parent_key}:ovrdtime", 0),
+                        "autoofftime": self.coordinator.get_field(self._mac, f"{parent_key}:autoofftime", -1)
+                    }
+                }
+                _LOGGER.debug("Sending combined ON command for %s: %s", parent_key, payload)
+                await self.hub.send_smarttemp_command(self._mac, payload)
 
 
     async def async_set_temperature(self, **kwargs):
