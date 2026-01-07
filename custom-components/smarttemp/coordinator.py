@@ -89,3 +89,13 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         """Although a list, there is only 1 humidity element. Zones 2 onward get same as zone 1."""
         val = self.data.get(mac, {}).get("dis_room_humi")
         return val[0] if val else 0
+    
+    async def check_and_shutdown_system(self, mac):
+        """Monitor zones and turn off the main unit if all zones are 0."""
+        device_data = self.data.get(mac, {})
+        zone_statuses = device_data.get("dis_zone_onoff", [])
+
+        # If all zones in the list are 0 (Off), shut down the main unit
+        if all(status == 0 for status in zone_statuses):
+            _LOGGER.info("All zones for %s are off. Shutting down system mode.", mac)
+            await self.hub.send_smarttemp_command(mac, {"equip_mode": 0})

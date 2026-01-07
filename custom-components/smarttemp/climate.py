@@ -132,7 +132,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
 
     @property
     def fan_mode(self):
-        val = self.coordinator.get_field(self._mac, "fan_status", 0)
+        val = self.coordinator.get_field(self._mac, "fan_speed", 0)
         mapping = {0: FAN_AUTO, 1: FAN_LOW, 2: FAN_MEDIUM, 3: FAN_HIGH}
         return mapping.get(val, FAN_AUTO)
     
@@ -181,6 +181,8 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
                 # Zoned: Only turn off this specific zone
                 parent_key = f"zone{self._zone_idx}"
                 await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 0}})
+                # Ask coordinator to check if the whole system should turn off
+                await self.coordinator.check_and_shutdown_system(self._mac)
             return
 
         # 2. Handle Turning ON / Changing Modes
@@ -200,6 +202,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         if self._zone_idx > 0:
             parent_key = f"zone{self._zone_idx}"
             await self.hub.send_smarttemp_command(self._mac, {parent_key: {"onoff": 1}})
+
 
     async def async_set_temperature(self, **kwargs):
         """Pack temperature payload using zone-specific keys."""
