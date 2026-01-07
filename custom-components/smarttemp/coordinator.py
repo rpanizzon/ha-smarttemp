@@ -22,32 +22,32 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         
         self.data[mac].update(payload)
 
-        # Trigger discovery when we receive the full configuration (pair_key)
+        # Trigger discovery and state checks on 'pair_key'
         if "pair_key" in payload:
             zone_count = self.get_field(mac, "zone_no", 0)
             
             if zone_count > 0:
-                # Case: Zoned Device
-                # We skip Zone 0 and only create the named zones (1, 2...)
-                _LOGGER.info("MAC %s is Zoned. Signaling %s zones.", mac, zone_count)
+                # 1. Possible discovery: Check/Create entities for each zone
                 for i in range(1, zone_count + 1):
                     self._check_and_signal(mac, i)
+                
+                # 2. Logic: Check if system should turn off (Zoned only)
+                await self._check_system_off_logic(mac, payload)
             else:
-                # Case: Non-Zoned Device
-                # We signal Zone 0 to represent the main system control
-                _LOGGER.info("MAC %s is Non-Zoned. Signaling System (Zone 0).", mac)
+                # Case: Non-Zoned Device - Check for dicovery
                 self._check_and_signal(mac, 0)
         
         self.async_set_updated_data(self.data)
 
     def _check_and_signal(self, mac, zone_idx):
-        """Signal MAC + Zone Index to platforms."""
+        """Signal MAC + Zone Index once per entity."""
         entity_key = f"{mac}_{zone_idx}"
         if entity_key not in self.discovered_entities:
+            # Only logs once per entity creation
+            _LOGGER.info("Creating entity: MAC %s, Zone %s", mac, zone_idx)
             self.discovered_entities.add(entity_key)
-            # Sends (mac, zone_idx) to climate.py
             async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, (mac, zone_idx))
-
+            
     def get_field(self, mac, field, default=None):
         """
         Pure data fetcher. 
@@ -90,12 +90,25 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         val = self.data.get(mac, {}).get("dis_room_humi")
         return val[0] if val else 0
     
-    async def check_and_shutdown_system(self, mac):
-        """Monitor zones and turn off the main unit if all zones are 0."""
-        device_data = self.data.get(mac, {})
-        zone_statuses = device_data.get("dis_zone_onoff", [])
+    async def _check_system_off_logic(self, mac, data):
+        """Monitor the pair_key JSON and shut down if all zones are off."""
+        # Current hardware state
+        equip_mode = data.get("equip_mode")
+        zone_count = data.get("zone_no", 0)
 
-        # If all zones in the list are 0 (Off), shut down the main unit
-        if all(status == 0 for status in zone_statuses):
-            _LOGGER.info("All zones for %s are off. Shutting down system mode.", mac)
-            await self.hub.send_smarttemp_command(mac, {"equip_mode": 0})
+        # Only proceed if the system is currently running (not 0)
+        if equip_mode != 0:
+            all_off = True
+            for i in range(1, zone_count + 1):
+                # Accessing nested zone data: data['zone1']['onoff']
+                zone_data = data.get(f"zone{i}", {})
+                if zone_data.get("onoff") == 1:
+                    all_off = False
+                    break
+            
+            if all_off:
+                _LOGGER.info("All zones reported OFF in JSON. Sending equip_mode: 0")
+                # Trigger the hardware shutdown
+                self.hass.async_create_task(
+                    self.hub.send_smarttemp_command(mac, {"equip_mode": 0})
+                )
