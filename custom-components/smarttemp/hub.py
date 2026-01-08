@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from .const import DOMAIN, NEW_DEVICE_SIGNAL
+from .const import DOMAIN, NEW_DEVICE_SIGNAL, TIME_ADJUST
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class SmartTempHub:
         if resp_type == "handshake":
             data = {
                 "local_time": now.strftime("%Y%m%d%H%M"),
-                "MsgID": (now + timedelta(hours=1)).strftime("%Y%m%d%H%M%S"),
+                "MsgID": (now + timedelta(hours=TIME_ADJUST)).strftime("%Y%m%d%H%M%S"),
                 "weather_code": 1,
                 "out_temp": 220,
                 "out_humi": 450,

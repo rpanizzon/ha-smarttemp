@@ -8,6 +8,8 @@ HEARTBEAT_PAYLOAD = "__heartbeat__\n"
 SUB_FRAME_PREFIX = "SUB"  # [cite: 5]
 
 # Protocol Scaling
+# Time adjustment in hours to shift server to diffeent time zone
+TIME_ADJUST = 0
 # All temperatures are scaled integers (x10)
 TEMP_SCALE_FACTOR = 10.0 
 
