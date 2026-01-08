@@ -20,10 +20,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = SmartTempCoordinator(hass, hub)
     hub.coordinator = coordinator
 
-    # Start the TCP server and handle startup errors cleanly
     try:
         await hub.start_server()
-    except Exception as err:  # broad except to avoid breaking HA on unexpected errors
+    except Exception as err:
         _LOGGER.exception("Failed to start SmartTemp hub: %s", err)
         return False
 
@@ -33,14 +32,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
-    # Forward setup to all supported platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Ensure the hub is stopped when the config entry is unloaded
+    # --- MOVE THIS SECTION UP ---
+    async def handle_inject_command(call):
+        """Service to send raw JSON to a specific MAC address."""
+        mac = call.data.get("mac")
+        cmd = call.data.get("cmd")
+        
+        # Retrieve the hub from hass.data
+        for entry_id in hass.data[DOMAIN]:
+            current_hub = hass.data[DOMAIN][entry_id].get("hub")
+            if current_hub:
+                await current_hub.send_raw_command(mac, cmd)
+
+    hass.services.async_register(
+        DOMAIN, 
+        "inject_raw_command", 
+        handle_inject_command
+    )
+    # --- END OF SERVICE SECTION ---
+
     entry.async_on_unload(lambda: hass.async_create_task(hub.stop_server()))
 
-    return True
+    return True  # This must be the LAST line of the function
 
+    async def handle_inject_command(call):
+        """Service to send raw JSON to a specific MAC address."""
+        mac = call.data.get("mac")
+        cmd = call.data.get("cmd")
+        
+        # Retrieve the hub from hass.data
+        # This loops through entries to find the active hub
+        for entry_id in hass.data[DOMAIN]:
+            current_hub = hass.data[DOMAIN][entry_id].get("hub")
+            if current_hub:
+                await current_hub.send_raw_command(mac, cmd)
+
+    # Register the service under the integration's DOMAIN
+    hass.services.async_register(
+        DOMAIN, 
+        "inject_raw_command", 
+        handle_inject_command
+    )
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
