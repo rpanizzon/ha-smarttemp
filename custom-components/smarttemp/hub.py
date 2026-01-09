@@ -36,7 +36,7 @@ class SmartTempHub:
             self._serve_task = None
 
     async def handle_client(self, reader, writer):
-        """Main connection handler."""
+        """Sequential handler with high-resolution trace logging for debugging timeouts."""
         address = writer.get_extra_info('peername')
         _LOGGER.info(f"New connection from {address}")
         
@@ -44,9 +44,10 @@ class SmartTempHub:
         buffer = b""
 
         try:
-            # 1. Handshake Phase: Wait for SUB command
+            # Phase 1: Handshake (Wait for SUB)
             while True:
-                data = await reader.read(1024)
+                # 30s timeout for handshake
+                data = await asyncio.wait_for(reader.read(4096), timeout=12.0)
                 if not data:
                     return
                 buffer += data
@@ -56,55 +57,75 @@ class SmartTempHub:
                     line = buffer[:line_end].decode('ascii').strip()
                     current_mac = line.split()[1]
                     
-                    # Store connection for outgoing commands
                     self.active_connections[current_mac] = writer
-                    
-                    # Immediate definitive handshake (Time + Weather)
                     await self.send_protocol_response(writer, "handshake")
                     
-                    # Advance buffer past the SUB line
                     buffer = buffer[line_end+1:]
                     _LOGGER.info(f"Handshake complete for MAC: {current_mac}")
                     break
-
-            # 2. Operational Phase: JSON Processing loop
+            
+            # Phase 2: We have JSON package  - Process JSON
             while True:
-                data = await reader.read(1024)
+                # Increased read size to attempt to catch the large AA6 pair_key
+                data = await asyncio.wait_for(reader.read(4096), timeout=12.0)
                 if not data:
+                    _LOGGER.debug(f"TRACE: {current_mac} closed the connection.")
                     break
+                
                 buffer += data
+                _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
+                             current_mac, len(data), len(buffer), buffer[:30])
 
-                # Bracket counting for cross-packet reassembly
                 while b"{" in buffer:
                     start_index = buffer.find(b"{")
+                    
+                    # Log if we have junk leading data before the first bracket
+                    if start_index > 0:
+                        _LOGGER.debug("TRACE [%s]: Discarding %d bytes of leading data: %s", 
+                                     current_mac, start_index, buffer[:start_index])
+                        buffer = buffer[start_index:]
+                        continue
+
                     bracket_count = 0
                     json_found = False
                     
-                    for i in range(start_index, len(buffer)):
+                    # Scan buffer for matching closing bracket
+                    for i in range(len(buffer)):
                         if buffer[i] == ord("{"):
                             bracket_count += 1
                         elif buffer[i] == ord("}"):
                             bracket_count -= 1
                         
                         if bracket_count == 0:
-                            # Full JSON object reassembled
-                            json_bytes = buffer[start_index:i+1]
+                            json_bytes = buffer[:i+1]
                             try:
                                 payload = json.loads(json_bytes.decode('utf-8'))
+                                
+                                # ONLY call process_payload. 
+                                # DO NOT wrap this in async_create_task here.
                                 await self.process_payload(current_mac, payload, writer)
-                            except json.JSONDecodeError:
-                                _LOGGER.error(f"Malformed JSON from {current_mac}")
-                            
-                            buffer = buffer[i+1:]
-                            json_found = True
-                            break
+                                
+                                buffer = buffer[i+1:]
+                                json_found = True
+                                break
+                            except json.JSONDecodeError as e:
+                                _LOGGER.error("TRACE [%s]: JSON Error: %s", current_mac, e.msg)
+                                break
+    
+                            except json.JSONDecodeError as e:
+                                _LOGGER.error("TRACE [%s]: JSON Decode Error at byte %d: %s", current_mac, e.pos, e.msg)
+                                # Break and wait for more data to complete the fragment
+                                break 
                     
                     if not json_found:
-                        # Fragmented JSON; wait for more data
+                        _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
+                                     current_mac, bracket_count)
                         break
 
+        except asyncio.TimeoutError:
+            _LOGGER.warning(f"TRACE [%s]: Timeout reached. Buffer had %d bytes.", current_mac, len(buffer))
         except Exception as err:
-            _LOGGER.error(f"Connection error for {address}: {err}")
+            _LOGGER.error(f"TRACE [%s]: Socket Error: %s", current_mac, err)
         finally:
             if current_mac:
                 self.active_connections.pop(current_mac, None)
@@ -112,47 +133,48 @@ class SmartTempHub:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
-                _LOGGER.debug("Error closing connection for %s", address)
-
+                pass
+            
     async def process_payload(self, mac, payload, writer):
-        """Filter protocol noise vs state data."""
+        """Process JSON and send standardized protocol ACKs."""
         
-        # 1. Handle Protocol Heartbeats (Internal reply)
-        if "heartbeat" in payload or "hb" in payload:
-            await self.send_protocol_response(writer, "heartbeat")
-            return
-
-        # 2. Handle Protocol Time/Weather Requests
-        if "get_time" in payload or "get_weather" in payload:
+        # 1. Handle "cmd: time" - Specific device request for time sync
+        # We respond with the same packet used for the initial SUB handshake
+        if payload.get("cmd") == "time":
+            _LOGGER.debug("TRACE [%s]: Device requested time, sending sync response", mac)
             await self.send_protocol_response(writer, "handshake")
             return
 
-        # 3. Route state/config data to Coordinator
-        # This includes "pair_key" which triggers discovery
-        await self.coordinator.async_process_json(mac, payload)
+        # 2. Universal Acknowledgment for all other JSON
+        # This includes pair_key and status updates.
+        # Sending {"result":"ok"} prevents the device watchdog from resetting.
+        try:
+            ack = json.dumps({"result": "ok"}, separators=(',', ':')).encode('ascii')
+            writer.write(ack)
+            await writer.drain()
+            _LOGGER.debug("TRACE [%s]: Sent result:ok ACK", mac)
+        except Exception as e:
+            _LOGGER.error("TRACE [%s]: Failed to send result:ok: %s", mac, e)
+
+        # 3. Offload heavy processing to the coordinator
+        # We do this after the ACK to ensure the hardware is satisfied immediately
+        self.hass.async_create_task(self.coordinator.async_process_json(mac, payload))
 
     async def send_protocol_response(self, writer, resp_type):
-        """Send standardized JSON responses for protocol maintenance."""
+        """Send standardized JSON response for SUB and cmd:time."""
         now = datetime.now()
         
-        if resp_type == "handshake":
-            data = {
-                "local_time": now.strftime("%Y%m%d%H%M"),
-                "MsgID": (now + timedelta(hours=TIME_ADJUST)).strftime("%Y%m%d%H%M%S"),
-                "weather_code": 1,
-                "out_temp": 220,
-                "out_humi": 450,
-                "day1_high": 260,
-                "day1_low": 140,
-                "day1_weather": 1
-            }
-        else:  # Heartbeat ACK
-            data = {"heartbeat": "ok", "time": now.strftime("%Y%m%d%H%M%S")}
+        # Consistent response format for both handshake and time requests
+        data = {
+            "local_time": now.strftime("%Y%m%d%H%M"),
+            "MsgID": (now + timedelta(hours=TIME_ADJUST)).strftime("%Y%m%d%H%M%S")
+        }
 
         try:
             resp = json.dumps(data, separators=(',', ':')).encode('ascii')
             writer.write(resp)
             await writer.drain()
+            _LOGGER.debug("Sent %s response", resp_type)
         except Exception as e:
             _LOGGER.error(f"Failed to send {resp_type}: {e}")
 
@@ -172,3 +194,33 @@ class SmartTempHub:
             await writer.drain()
         except Exception as e:
             _LOGGER.error(f"Error sending command to {mac}: {e}")
+    
+    async def send_raw_command(self, mac, raw_input):
+        """
+        Wraps a naked command string into valid JSON with a MsgID.
+        Input Example: "cmd":"read","type":"all"
+        Output Sent: {"cmd":"read","type":"all","MsgID":"20260108120000"}
+        """
+        if mac not in self.active_connections:
+            _LOGGER.error(f"Injection failed: {mac} not connected")
+            return False
+
+        writer = self.active_connections[mac]
+        try:
+            # 1. Create the timestamp for MsgID
+            msg_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            
+            # 2. Construct the JSON string
+            # We wrap your input with the brackets and add the MsgID
+            # Using separators to keep it compact like the original protocol
+            full_command = f'{{{raw_input},"MsgID":"{msg_id}"}}'
+            
+            payload = full_command.encode('ascii')
+            writer.write(payload)
+            await writer.drain()
+            
+            _LOGGER.info(f"INJECTED to {mac}: {full_command}")
+            return True
+        except Exception as e:
+            _LOGGER.error(f"Injection error for {mac}: {e}")
+            return False
