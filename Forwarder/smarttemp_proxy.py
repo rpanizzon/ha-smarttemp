@@ -4,8 +4,8 @@ import datetime
 import sys
 
 LISTEN_PORT = 2223
-REMOTE = ("27.131.76.20", 2223)
-# REMOTE = ("192.168.0.30", 2223)
+# REMOTE = ("27.131.76.20", 2223)
+REMOTE = ("192.168.0.30", 2223)
 LOG_FILE = "smarttemp_handshake.log"
 
 class Logger:
@@ -20,14 +20,16 @@ class Logger:
             self.file.write(formatted_msg)
             self.file.flush()
             # Also print to console so you can see it happening
-            sys.stdout.write(formatted_msg)
+            if "ASC:" in message or "Connection" in message:
+                sys.stdout.write(formatted_msg)
+                sys.stdout.flush()
 
 logger = Logger(LOG_FILE)
 
 def pipe(src, dst, label):
     try:
         while True:
-            data = src.recv(4096)
+            data = src.recv(8192)
             if not data:
                 logger.log(f"[{label}] Connection closed")
                 break
