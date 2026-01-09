@@ -12,3 +12,5 @@ custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
 Documentation/Dictionary.xlsx
 Forwarder/full_guest.log
 Forwarder/full_living.log
+Forwarder/smarttemp_handshake1.log
+Forwarder/smarttemp_handshake2.log
