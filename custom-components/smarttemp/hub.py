@@ -17,9 +17,10 @@ class SmartTempHub:
         self.port = port
         self.coordinator = coordinator
         self.active_connections = {}  # MAC: writer
+        self.command_queues = {}     # MAC: asyncio.Queue()
         self.server = None
         self._serve_task = None
-
+        
     async def start_server(self):
         """Start the TCP Server."""
         self.server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
@@ -136,28 +137,44 @@ class SmartTempHub:
                 pass
             
     async def process_payload(self, mac, payload, writer):
-        """Process JSON and send standardized protocol ACKs."""
+        """Process incoming JSON and respond with either a stacked command or an ACK."""
         
-        # 1. Handle "cmd: time" - Specific device request for time sync
-        # We respond with the same packet used for the initial SUB handshake
+        # 1. Handle Time Sync (Always priority handshake)
         if payload.get("cmd") == "time":
-            _LOGGER.debug("TRACE [%s]: Device requested time, sending sync response", mac)
             await self.send_protocol_response(writer, "handshake")
             return
 
-        # 2. Universal Acknowledgment for all other JSON
-        # This includes pair_key and status updates.
-        # Sending {"result":"ok"} prevents the device watchdog from resetting.
-        try:
-            ack = json.dumps({"result": "ok"}, separators=(',', ':')).encode('ascii')
-            writer.write(ack)
-            await writer.drain()
-            _LOGGER.debug("TRACE [%s]: Sent result:ok ACK", mac)
-        except Exception as e:
-            _LOGGER.error("TRACE [%s]: Failed to send result:ok: %s", mac, e)
+        # 2. Check for stacked commands for this specific MAC
+        queue = self.command_queues.get(mac)
+        command_sent = False
 
-        # 3. Offload heavy processing to the coordinator
-        # We do this after the ACK to ensure the hardware is satisfied immediately
+        if queue and not queue.empty():
+            try:
+                # Get the next command from the stack
+                cmd_dict = queue.get_nowait()
+                cmd_dict["MsgID"] = datetime.now().strftime("%Y%m%d%H%M%S")
+                
+                payload_to_send = json.dumps(cmd_dict, separators=(',', ':')).encode('ascii')
+                writer.write(payload_to_send)
+                await writer.drain()
+                
+                _LOGGER.info("TRACE [%s]: Sent STACKED command instead of ACK: %s", mac, cmd_dict)
+                command_sent = True
+            except asyncio.QueueEmpty:
+                pass
+            except Exception as e:
+                _LOGGER.error("TRACE [%s]: Error sending stacked command: %s", mac, e)
+
+        # 3. Fallback to standard ACK if no command was waiting
+        if not command_sent:
+            try:
+                ack = json.dumps({"result": "ok"}, separators=(',', ':')).encode('ascii')
+                writer.write(ack)
+                await writer.drain()
+            except Exception as e:
+                _LOGGER.error("TRACE [%s]: ACK failed: %s", mac, e)
+
+        # 4. Offload the incoming data to the coordinator
         self.hass.async_create_task(self.coordinator.async_process_json(mac, payload))
 
     async def send_protocol_response(self, writer, resp_type):
@@ -179,21 +196,13 @@ class SmartTempHub:
             _LOGGER.error(f"Failed to send {resp_type}: {e}")
 
     async def send_smarttemp_command(self, mac, cmd_dict):
-        """Send a command from HA to the controller."""
-        if mac not in self.active_connections:
-            _LOGGER.error(f"Cannot send command: {mac} not connected")
-            return
-
-        writer = self.active_connections[mac]
-        try:
-            # Most SmartTemp controllers expect a MsgID in commands too
-            cmd_dict["MsgID"] = datetime.now().strftime("%Y%m%d%H%M%S")
-            payload = json.dumps(cmd_dict, separators=(',', ':')).encode('ascii')
-            _LOGGER.debug(f"Command Sent:{payload}")
-            writer.write(payload)
-            await writer.drain()
-        except Exception as e:
-            _LOGGER.error(f"Error sending command to {mac}: {e}")
+        """Add a command to the stack instead of sending it immediately."""
+        if mac not in self.command_queues:
+            self.command_queues[mac] = asyncio.Queue()
+        
+        # Add to stack
+        await self.command_queues[mac].put(cmd_dict)
+        _LOGGER.debug("TRACE [%s]: Command added to stack: %s", mac, cmd_dict)
     
     async def send_raw_command(self, mac, raw_input):
         """
