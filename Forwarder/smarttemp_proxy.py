@@ -29,7 +29,7 @@ logger = Logger(LOG_FILE)
 def pipe(src, dst, label):
     try:
         while True:
-            data = src.recv(8192)
+            data = src.recv(1024)
             if not data:
                 logger.log(f"[{label}] Connection closed")
                 break
