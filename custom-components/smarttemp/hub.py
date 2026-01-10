@@ -81,6 +81,7 @@ class SmartTempHub:
                     start_index = buffer.find(b"{")
                     
                     # Log if we have junk leading data before the first bracket
+                    # This is probably __heartbeat__
                     if start_index > 0:
                         _LOGGER.debug("TRACE [%s]: Discarding %d bytes of leading data: %s", 
                                      current_mac, start_index, buffer[:start_index])
@@ -119,8 +120,8 @@ class SmartTempHub:
                                 break 
                     
                     if not json_found:
-                        _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
-                                     current_mac, bracket_count)
+                        # _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
+                        #             current_mac, bracket_count)
                         break
 
         except asyncio.TimeoutError:
@@ -158,7 +159,7 @@ class SmartTempHub:
                 writer.write(payload_to_send)
                 await writer.drain()
                 
-                _LOGGER.info("TRACE [%s]: Sent STACKED command instead of ACK: %s", mac, cmd_dict)
+                _LOGGER.debug("TRACE [%s]: Sent STACKED command instead of ACK: %s", mac, cmd_dict)
                 command_sent = True
             except asyncio.QueueEmpty:
                 pass
@@ -204,32 +205,26 @@ class SmartTempHub:
         await self.command_queues[mac].put(cmd_dict)
         _LOGGER.debug("TRACE [%s]: Command added to stack: %s", mac, cmd_dict)
     
-    async def send_raw_command(self, mac, raw_input):
+    async def send_raw_command(self, mac, raw_json_string):
         """
         Wraps a naked command string into valid JSON with a MsgID.
         Input Example: "cmd":"read","type":"all"
         Output Sent: {"cmd":"read","type":"all","MsgID":"20260108120000"}
         """
+        try:
+            # Clean up the string if the user sent a 'naked' command
+            if not raw_json_string.startswith("{"):
+                raw_json_string = "{" + raw_json_string + "}"
+            
+            cmd_dict = json.loads(raw_json_string)
+            
+            # RE-USE the main engine to handle the queue logic
+            await self.send_smarttemp_command(mac, cmd_dict)
+            
+            _LOGGER.debug("TRACE [%s]: Successfully stacked raw injection", mac)
+        except json.JSONDecodeError as e:
+            _LOGGER.error("TRACE [%s]: Invalid JSON injected: %s", mac, e)   
+        
         if mac not in self.active_connections:
             _LOGGER.error(f"Injection failed: {mac} not connected")
-            return False
-
-        writer = self.active_connections[mac]
-        try:
-            # 1. Create the timestamp for MsgID
-            msg_id = datetime.now().strftime("%Y%m%d%H%M%S")
-            
-            # 2. Construct the JSON string
-            # We wrap your input with the brackets and add the MsgID
-            # Using separators to keep it compact like the original protocol
-            full_command = f'{{{raw_input},"MsgID":"{msg_id}"}}'
-            
-            payload = full_command.encode('ascii')
-            writer.write(payload)
-            await writer.drain()
-            
-            _LOGGER.info(f"INJECTED to {mac}: {full_command}")
-            return True
-        except Exception as e:
-            _LOGGER.error(f"Injection error for {mac}: {e}")
             return False
