@@ -15,3 +15,7 @@ Forwarder/full_living.log
 Forwarder/smarttemp_handshake1.log
 Forwarder/smarttemp_handshake2.log
 Forwarder/Changing equip_mode not always working.log
+Forwarder/Full Trace/full_guest.log
+Forwarder/Full Trace/full_living.log
+/Forwarder/Full Trace
+Forwarder/guest_handshake.log
