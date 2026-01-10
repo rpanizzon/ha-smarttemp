@@ -20,7 +20,14 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         if mac not in self.data:
             self.data[mac] = {}
         
-        self.data[mac].update(payload)
+       # 1. Deep merge nested objects like 'sys_set' or 'zone1'
+        for key, value in payload.items():
+            if isinstance(value, dict) and key in self.data[mac] and isinstance(self.data[mac][key], dict):
+                # Only update the specific sub-keys provided (e.g., just heatset)
+                self.data[mac][key].update(value)
+            else:
+                # Top-level keys like 'equip_mode' or 'pair_key'
+                self.data[mac][key] = value
 
         # Trigger discovery and state checks on 'pair_key'
         if "pair_key" in payload:

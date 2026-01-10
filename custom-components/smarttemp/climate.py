@@ -169,59 +169,22 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         raw = self.coordinator.get_field(self._mac, "temp_max")
         return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
 
-    async def async_set_hvac_mode(self, hvac_mode):
-        """Pass hvac requests to the coordinator for combined processing."""
-        mapping = {HVACMode.OFF: 0, HVACMode.HEAT: 1, HVACMode.COOL: 3, HVACMode.HEAT_COOL: 4}
-        val = mapping.get(hvac_mode, 0)
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set new target hvac mode."""
+        _LOGGER.debug(f"Climate {self._mac} set_hvac_mode: {hvac_mode}")
         
-        # 1. Handle Non-Zoned (Guest)
-        if self._zone_idx == 0:
-            await self.hub.send_smarttemp_command(self._mac, {"equip_mode": val})
-            return
-
-        # 2. Handle Zoned (Lounge)
-        if hvac_mode == HVACMode.OFF:
-            # Sends {"zoneX": {"onoff": 0}}
-            await self.hub.send_smarttemp_command(self._mac, {f"zone{self._zone_idx}": {"onoff": 0}})
-        else:
-            # Sends {"equip_mode": val, "zoneX": {"onoff": 1}}
-            # Combining these ensures the system wakes up and opens the damper
-            await self.hub.send_smarttemp_command(self._mac, {
-                "equip_mode": val, 
-                f"zone{self._zone_idx}": {"onoff": 1}
-            })
+        # We pass the new mode to the bundler. 
+        # The bundler will pull the current temperatures from 'self' automatically.
+        await self._send_bundled_command(hvac_mode=hvac_mode)
 
     async def async_set_temperature(self, **kwargs):
-        """Pack temperature payload using zone-specific keys."""
-        temp_low = kwargs.get("target_temp_low") or self.target_temperature_low
-        temp_high = kwargs.get("target_temp_high") or self.target_temperature_high
-        
-        # Handle single slider setpoint
-        if temp := kwargs.get(ATTR_TEMPERATURE):
-            if self.hvac_mode == HVACMode.HEAT:
-                temp_low = temp
-            else:
-                temp_high = temp
-
-        # Determine if we use 'sys_set' (Guest) or 'zoneX' (Lounge)
-        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
-        
-        payload = {
-            parent_key: {
-                "heatset": int(temp_low * TEMP_SCALE_FACTOR),
-                "coolset": int(temp_high * TEMP_SCALE_FACTOR),
-                "progen": self.coordinator.get_field(self._mac, f"{parent_key}:progen", 0),
-                "ovrdtime": self.coordinator.get_field(self._mac, f"{parent_key}:ovrdtime", 0),
-                "autoofftime": self.coordinator.get_field(self._mac, f"{parent_key}:autoofftime", -1)
-            }
-        }
-        
-        # Explicitly include 'onoff' for Lounge zones to match hardware requirements
-        if self._zone_idx > 0:
-            payload[parent_key]["onoff"] = 1
-
-        await self.hub.send_smarttemp_command(self._mac, payload)
-        
+        """Pack temperature payload using the bundling helper."""
+        await self._send_bundled_command(
+            temp=kwargs.get(ATTR_TEMPERATURE),
+            temp_low=kwargs.get("target_temp_low"),
+            temp_high=kwargs.get("target_temp_high")
+        )
+                  
     async def async_set_fan_mode(self, fan_mode):
         """Set new target fan mode."""
         # Mapping HA constants to hardware integers (0:Auto, 1:Low, 2:Med, 3:High)
@@ -240,3 +203,50 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         # Mapping: Continuous Fan = 1, Auto Fan = 0
         val = 1 if preset_mode == "Continuous Fan" else 0
         await self.hub.send_smarttemp_command(self._mac, {"fan_mode": val})
+        
+    async def _send_bundled_command(self, hvac_mode=None, temp=None, temp_low=None, temp_high=None):
+        """Bundles mode and all setpoints into a single protocol-safe payload."""
+        
+        # 1. Resolve HVAC Mode and On/Off status
+        mapping = {HVACMode.OFF: 0, HVACMode.HEAT: 1, HVACMode.COOL: 3, HVACMode.HEAT_COOL: 4}
+        target_hvac = hvac_mode if hvac_mode is not None else self.hvac_mode
+        proto_mode = mapping.get(target_hvac, 0)
+        target_onoff = 1 if target_hvac != HVACMode.OFF else 0
+
+        # 2. Resolve Setpoints
+        h_val = temp_low if temp_low is not None else self.target_temperature_low
+        c_val = temp_high if temp_high is not None else self.target_temperature_high
+        
+        if temp is not None:
+            if target_hvac == HVACMode.HEAT:
+                h_val = temp
+            elif target_hvac == HVACMode.COOL:
+                c_val = temp
+
+        h_set = int((h_val or 20.0) * TEMP_SCALE_FACTOR)
+        c_set = int((c_val or 30.0) * TEMP_SCALE_FACTOR)
+
+        # 3. Construct Payload with equip_mode at the beginning
+        payload = {"equip_mode": proto_mode}
+
+        if self._zone_idx == 0:
+            # Non-Zoned / System command uses "sys_set"
+            payload["sys_set"] = {
+                "heatset": h_set,
+                "coolset": c_set,
+                "progen": self.coordinator.get_field(self._mac, "sys_set:progen", 0),
+                "ovrdtime": self.coordinator.get_field(self._mac, "sys_set:ovrdtime", 0),
+                "autoofftime": self.coordinator.get_field(self._mac, "sys_set:autoofftime", -1)
+            }
+        else:
+            # Zoned command uses "zoneX" and requires "onoff"
+            payload[f"zone{self._zone_idx}"] = {
+                "onoff": target_onoff,
+                "heatset": h_set,
+                "coolset": c_set,
+                "progen": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:progen", 0),
+                "ovrdtime": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:ovrdtime", 0),
+                "autoofftime": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:autoofftime", -1)
+            }
+
+        await self.hub.send_smarttemp_command(self._mac, payload)
