@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN, NEW_DEVICE_SIGNAL, TEMP_SCALE_FACTOR
+from .const import DOMAIN, NEW_DEVICE_SIGNAL, TEMP_SCALE_FACTOR, TIMEOUT_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,7 +168,13 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
     def max_temp(self):
         raw = self.coordinator.get_field(self._mac, "temp_max")
         return float(raw) / TEMP_SCALE_FACTOR if raw else 32.0
-
+    
+    @property
+    def available(self) -> bool:
+        """Read availability directly from the data state."""
+        # Look for the 'online' flag we injected in the hub
+        return self.coordinator.data.get(self._mac, {}).get("online", False)
+    
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
         _LOGGER.debug(f"Climate {self._mac} set_hvac_mode: {hvac_mode}")

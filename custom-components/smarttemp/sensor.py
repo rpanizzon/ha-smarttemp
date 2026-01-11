@@ -10,7 +10,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN, NEW_DEVICE_SIGNAL, TEMP_SCALE_FACTOR
-
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -66,6 +65,12 @@ class SmartTempTemperatureSensor(CoordinatorEntity, SensorEntity):
         if raw is not None and raw != -1000:
             return float(raw) / TEMP_SCALE_FACTOR
         return None
+    
+    @property
+    def available(self) -> bool:
+        """Read availability directly from the data state."""
+        # Look for the 'online' flag we injected in the hub
+        return self.coordinator.data.get(self._mac, {}).get("online", False)
 
 class SmartTempHumiditySensor(CoordinatorEntity, SensorEntity):
     """Humidity sensor using consolidated coordinator logic."""
@@ -96,3 +101,9 @@ class SmartTempHumiditySensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Uses the consolidated get_room_humidity from coordinator."""
         return self.coordinator.get_room_humidity(self._mac, self._zone_idx)
+    
+    @property
+    def available(self) -> bool:
+        """Read availability directly from the data state."""
+        # Look for the 'online' flag we injected in the hub
+        return self.coordinator.data.get(self._mac, {}).get("online", False)

@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from .const import DOMAIN, NEW_DEVICE_SIGNAL, TIME_ADJUST
+from .const import DOMAIN, NEW_DEVICE_SIGNAL, TIME_ADJUST, TIMEOUT_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class SmartTempHub:
         self.command_queues = {}     # MAC: asyncio.Queue()
         self.server = None
         self._serve_task = None
+        # self.online_macs = set()
         
     async def start_server(self):
         """Start the TCP Server."""
@@ -48,11 +49,22 @@ class SmartTempHub:
             # Phase 1: Handshake (Wait for SUB)
             while True:
                 # 30s timeout for handshake
-                data = await asyncio.wait_for(reader.read(4096), timeout=12.0)
-                if not data:
-                    return
+                data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
+                if not data: break
+                
                 buffer += data
                 
+                # Check if the coordinator already knows this MAC is online
+                current_status = self.coordinator.data.get(current_mac, {}).get("online", False)
+
+                if not current_status:
+                    # Status changed from Offline -> Online: Update the Coordinator
+                    if current_mac not in self.coordinator.data:
+                        self.coordinator.data[current_mac] = {}
+                    
+                    self.coordinator.data[current_mac]["online"] = True
+                    self.coordinator.async_set_updated_data(self.coordinator.data)
+                                    
                 if buffer.startswith(SUB_FRAME_PREFIX) and b"\x0a" in buffer:
                     line_end = buffer.find(b"\x0a")
                     line = buffer[:line_end].decode('ascii').strip()
@@ -123,12 +135,22 @@ class SmartTempHub:
                         break
 
         except asyncio.TimeoutError:
-            _LOGGER.warning(f"TRACE [%s]: Timeout reached. Buffer had %d bytes.", current_mac, len(buffer))
+            _LOGGER.warning(f"Device {current_mac} timed out.")
         except Exception as err:
             _LOGGER.error(f"TRACE [%s]: Socket Error: %s", current_mac, err)
         finally:
             if current_mac:
                 self.active_connections.pop(current_mac, None)
+                
+                # Force the status to False
+                if self.coordinator:
+                    if current_mac not in self.coordinator.data:
+                        self.coordinator.data[current_mac] = {}
+                    
+                    self.coordinator.data[current_mac]["online"] = False
+                    self.coordinator.async_set_updated_data(self.coordinator.data)
+            
+            # 3. Socket Cleanup
             try:
                 writer.close()
                 await writer.wait_closed()

@@ -6,6 +6,7 @@ DOMAIN = "smarttemp"
 DEFAULT_PORT = 2223  # 
 HEARTBEAT_PAYLOAD = "__heartbeat__\n"  
 SUB_FRAME_PREFIX = "SUB"  # [cite: 5]
+TIMEOUT_SECONDS = 15.0  # seconds for read timeouts
 
 # Protocol Scaling
 # Time adjustment in hours to shift server to diffeent time zone
