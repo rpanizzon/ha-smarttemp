@@ -74,8 +74,8 @@ class SmartTempHub:
                     break
                 
                 buffer += data
-                _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
-                             current_mac, len(data), len(buffer), buffer[:30])
+                # _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
+                #              current_mac, len(data), len(buffer), buffer[:30])
 
                 while b"{" in buffer:
                     start_index = buffer.find(b"{")
@@ -83,8 +83,6 @@ class SmartTempHub:
                     # Log if we have junk leading data before the first bracket
                     # This is probably __heartbeat__
                     if start_index > 0:
-                        _LOGGER.debug("TRACE [%s]: Discarding %d bytes of leading data: %s", 
-                                     current_mac, start_index, buffer[:start_index])
                         buffer = buffer[start_index:]
                         continue
 
@@ -111,7 +109,7 @@ class SmartTempHub:
                                 json_found = True
                                 break
                             except json.JSONDecodeError as e:
-                                _LOGGER.error("TRACE [%s]: JSON Error: %s", current_mac, e.msg)
+                                _LOGGER.info("TRACE [%s]: JSON Error: %s", current_mac, e.msg)
                                 break
     
                             except json.JSONDecodeError as e:
