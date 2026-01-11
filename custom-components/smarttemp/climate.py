@@ -210,8 +210,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         # 1. Resolve HVAC Mode and On/Off status
         mapping = {HVACMode.OFF: 0, HVACMode.HEAT: 1, HVACMode.COOL: 3, HVACMode.HEAT_COOL: 4}
         target_hvac = hvac_mode if hvac_mode is not None else self.hvac_mode
-        proto_mode = mapping.get(target_hvac, 0)
-        target_onoff = 1 if target_hvac != HVACMode.OFF else 0
+        proto_mode = mapping.get(target_hvac, 0) 
 
         # 2. Resolve Setpoints
         h_val = temp_low if temp_low is not None else self.target_temperature_low
@@ -227,9 +226,10 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         c_set = int((c_val or 30.0) * TEMP_SCALE_FACTOR)
 
         # 3. Construct Payload with equip_mode at the beginning
-        payload = {"equip_mode": proto_mode}
+        payload = {}
 
         if self._zone_idx == 0:
+            payload = {"equip_mode": proto_mode}
             # Non-Zoned / System command uses "sys_set"
             payload["sys_set"] = {
                 "heatset": h_set,
@@ -239,9 +239,14 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
                 "autoofftime": self.coordinator.get_field(self._mac, "sys_set:autoofftime", -1)
             }
         else:
-            # Zoned command uses "zoneX" and requires "onoff"
+            # ZONE ENTITY: Only toggles its own damper/onoff status
+            # We keep equip_mode OUT of this payload so we don't override other zones
+            if proto_mode != 0:
+                payload = {"equip_mode": proto_mode}
+        
+            # Add rest of zone payload
             payload[f"zone{self._zone_idx}"] = {
-                "onoff": target_onoff,
+                "onoff": 1 if proto_mode != 0 else 0, # Use local onoff logic
                 "heatset": h_set,
                 "coolset": c_set,
                 "progen": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:progen", 0),
