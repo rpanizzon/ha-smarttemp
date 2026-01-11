@@ -1,0 +1,11 @@
+# If you created a custom service to send raw JSON, it would look like this:
+send_raw_command:
+  name: Send Raw Command
+  description: Sends a raw JSON payload to the SmartTemp controller.
+  fields:
+    payload:
+      name: Payload
+      description: The JSON dictionary to send.
+      example: '{"fan_speed": 1}'
+      selector:
+        object:
