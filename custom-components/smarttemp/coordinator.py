@@ -16,39 +16,48 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         self.discovered_entities = set()
 
     async def async_process_json(self, mac, payload):
-        """Process incoming JSON and signal entity discovery."""
-        if mac not in self.data:
-            self.data[mac] = {}
-        
-        # Ensure the device is marked online whenever data arrives
-        self.data[mac]["online"] = True
-        
-       # 1. Deep merge nested objects like 'sys_set' or 'zone1'
-        for key, value in payload.items():
-            if isinstance(value, dict) and key in self.data[mac] and isinstance(self.data[mac][key], dict):
-                # Only update the specific sub-keys provided (e.g., just heatset)
-                self.data[mac][key].update(value)
-            else:
-                # Top-level keys like 'equip_mode' or 'pair_key'
-                self.data[mac][key] = value
-
-        # Trigger discovery and state checks on 'pair_key'
+        """Process incoming JSON with gated availability and logic checks."""
+        # 1. Gated Handshake: Initialization via pair_key
         if "pair_key" in payload:
-            zone_count = self.get_field(mac, "zone_no", 0)
+            if mac not in self.data:
+                self.data[mac] = {}
             
+            self.data[mac]["online"] = True
+            
+            zone_count = payload.get("zone_no", 0)
             if zone_count > 0:
-                # 1. Possible discovery: Check/Create entities for each zone
                 for i in range(1, zone_count + 1):
                     self._check_and_signal(mac, i)
-                
-                # 2. Logic: Check if system should turn off (Zoned only)
-                await self._check_system_off_logic(mac, payload)
             else:
-                # Case: Non-Zoned Device - Check for dicovery
                 self._check_and_signal(mac, 0)
+
+        # 2. Block processing if we haven't received a pair_key yet
+        if not self.data.get(mac, {}).get("online"):
+            return
+
+        # 3. Data Processing and "Off" Event Detection
+        any_zone_turned_off = False
         
+        for key, value in payload.items():
+            # Deep merge logic
+            if isinstance(value, dict) and key in self.data[mac] and isinstance(self.data[mac][key], dict):
+                self.data[mac][key].update(value)
+            else:
+                self.data[mac][key] = value
+
+            # Running check: Did this payload contain a zone turning off?
+            if key.startswith("zone") and isinstance(value, dict):
+                if value.get("onoff") == 0:
+                    any_zone_turned_off = True
+
+        # 4. Final state push to HA
         self.async_set_updated_data(self.data)
 
+        # 5. System Off Logic: Triggered by a zone turn-off event or pair_key update
+        if any_zone_turned_off:
+            # We perform a full memory check to verify the 'Last Man Standing'
+            await self._check_system_off_logic(mac)
+            
     def _check_and_signal(self, mac, zone_idx):
         """Signal MAC + Zone Index once per entity."""
         entity_key = f"{mac}_{zone_idx}"
@@ -100,25 +109,24 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         val = self.data.get(mac, {}).get("dis_room_humi")
         return val[0] if val else 0
     
-    async def _check_system_off_logic(self, mac, data):
-        """Monitor the pair_key JSON and shut down if all zones are off."""
-        # Current hardware state
-        equip_mode = data.get("equip_mode")
-        zone_count = data.get("zone_no", 0)
+    async def _check_system_off_logic(self, mac):
+        """Perform a full system sweep to see if we should shut down the master."""
+        device_data = self.data.get(mac, {})
+        equip_mode = device_data.get("equip_mode")
+        zone_count = device_data.get("zone_no", 0)
 
-        # Only proceed if the system is currently running (not 0)
-        if equip_mode != 0:
-            all_off = True
+        # Only proceed if the master unit is actually running
+        if equip_mode is not None and equip_mode != 0:
+            still_running = False
             for i in range(1, zone_count + 1):
-                # Accessing nested zone data: data['zone1']['onoff']
-                zone_data = data.get(f"zone{i}", {})
-                if zone_data.get("onoff") == 1:
-                    all_off = False
+                zone_key = f"zone{i}"
+                if device_data.get(zone_key, {}).get("onoff") == 1:
+                    still_running = True
                     break
             
-            if all_off:
-                _LOGGER.info("All zones reported OFF in JSON. Sending equip_mode: 0")
-                # Trigger the hardware shutdown
+            if not still_running:
+                _LOGGER.info("MAC %s: Full check confirmed all zones OFF. Shutting down Master.", mac)
+                # Dispatch shutdown command via Hub
                 self.hass.async_create_task(
                     self.hub.send_smarttemp_command(mac, {"equip_mode": 0})
                 )
