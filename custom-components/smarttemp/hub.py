@@ -20,7 +20,6 @@ class SmartTempHub:
         self.command_queues = {}     # MAC: asyncio.Queue()
         self.server = None
         self._serve_task = None
-        # self.online_macs = set()
         
     async def start_server(self):
         """Start the TCP Server."""
@@ -53,17 +52,6 @@ class SmartTempHub:
                 if not data: break
                 
                 buffer += data
-                
-                # Check if the coordinator already knows this MAC is online
-                current_status = self.coordinator.data.get(current_mac, {}).get("online", False)
-
-                if not current_status:
-                    # Status changed from Offline -> Online: Update the Coordinator
-                    if current_mac not in self.coordinator.data:
-                        self.coordinator.data[current_mac] = {}
-                    
-                    self.coordinator.data[current_mac]["online"] = True
-                    self.coordinator.async_set_updated_data(self.coordinator.data)
                                     
                 if buffer.startswith(SUB_FRAME_PREFIX) and b"\x0a" in buffer:
                     line_end = buffer.find(b"\x0a")
@@ -165,9 +153,8 @@ class SmartTempHub:
             await self.send_protocol_response(writer, "handshake")
             return
 
-        # 2. Check for stacked commands for this specific MAC
+        # 2. Send response - either from stacked command or standard ACK
         queue = self.command_queues.get(mac)
-        command_sent = False
 
         if queue and not queue.empty():
             try:
@@ -185,9 +172,8 @@ class SmartTempHub:
                 pass
             except Exception as e:
                 _LOGGER.error("TRACE [%s]: Error sending stacked command: %s", mac, e)
-
-        # 3. Fallback to standard ACK if no command was waiting
-        if not command_sent:
+        else:
+        # 3. Fallback to standard ACK
             try:
                 ack = json.dumps({"result": "ok"}, separators=(',', ':')).encode('ascii')
                 writer.write(ack)

@@ -42,16 +42,17 @@ Early development
 ### Functionality / To-Do 
 See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a complete list of know issues/requests.
  - Hub
-     - [ ] Fix Time issues
-     - [ ] is hub processing time and weather commands?
+     - [ ] do we do something about __heartbeat___? No, not until weather is issuing a response
+     - [ ] forcing a pair-key? How?
  - Coordinator
-     - [ ] Turn Controller off when all zones are off
+     - [ ] Delayedr eaction to change of hvac modes
+     - [ ] Turn Controller off when all zones are off - delated turning off
 
  - Climate
     - [ ] autoofftime, progen and ovrtime 
  - Sensors
     - [ ] 
- - ocumentation
+ - Documentation
  -     [ ]  Readme
  -     [ ]  Protocol Document
 
