@@ -1,61 +1,53 @@
-
-# Smart Temp Inspire Touch Air Conditioner controller - HA Custom Component
-Home Assistant custom component that creates an alterante server to the cloud based Smarttemp server (smarttempapp.com.au)
-This was developed by analysing the tcp traffic between the smarttemp controller and the cloud based server.
-Note, this integration replaces the cloud based server with Home Assistant, making the Smarttemp app unable to access the controller and therefore unusable. Use Home Assistant app instead.
-
+# SmartTemp Inspire Touch Air Conditioner controller - HA Custom Component
+Home Assistant custom component that creates a local alternate server for the Smarttemp Inspire Touch (replaces `smarttempapp.com.au`). 
+This was developed by analysing the tcp traffic between the smarttemp controller and the cloud based server `smarttempapp.com.au`.
+By redirecting traffic locally, you gain faster response times, remove cloud dependency, and enable advanced automation logic through Home Assitant. In addition, all other Home Assistant features, such as Google Assist is available (i.e "hay google, turn on the bedroom Air Conditioner")
+>***Note***, this integration replaces the cloud based server with Home Assistant, making the Smarttemp app unable to access the controller and therefore unusable. Use Home Assistant app instead.
 
 ## Features
-- Local TCP control
-- Per-zone climate entities
-- No cloud dependency
-- Home Assistant handles scheduling
-**This is a work-in-progress!** 
+- **Local TCP Control:** Direct communication with the hardware over your LAN.
+- **Per-Zone Climate Entities:** Automatically creates climate entities for each discovered zone upon receiving a configuration payload.
+- **Zero Cloud Dependency:** Works entirely offline once set up.
+- **Smart Master Shutdown:** Automatically turns off the master unit when the last active zone is closed.
 
-## Protocol
+## How it Works (The Logic)
+The custom component consits of 4 parts:
+- **hub.py:** simulates the as the server `smarttempapp.com.au`. Establishes connection to the controller(s), packages JSON payloads and sends them to the controller.
+- **controller.py:** On reception of a valid JSON (if necessary) create the entities, and update the values from the controller
+- **climante.py:** Updatees climate based information and returns updates to the controller
+- **sensor:** maintains the room temperature and hubidity sensors for each zone.
 
-## Setup
-You must have a local DNS installed to redirec the controller(s) to Home Assistant
-The recommended appoach is to use a local DNS such as Adguard or Pi-Hole and redirect "smarttempapp.com.au" to Home Assistant.
+To ensure stability with the SmartTemp hardware protocol, the integration uses specific logic gates:
 
-## Installation
-1. Copy `custom_components/smarttemp` into your HA config directory
-2. Restart Home Assistant
-3. Add integration via Settings → Devices & Services
+### Online Gating & Discovery
+The integration remains in an "Unavailable" state until a `pair_key` payload is received. This ensures that Home Assistant has the full configuration (zone counts, names, and limits) before creating entities, preventing "ghost" devices or incorrect state representation.
 
-### Configuration.yaml 
-    smarttemp:
-      username: "username"
-      password: "password"
-### Restart HA
-Once you've complete the above steps, restart Home Assistant. Once restarted, You should see entries appear in the integration. There should be 1 entry per zone/controller.
+### Command Injection (The Stack)
+Because the controller uses a specific poll-response cycle, commands sent from Home Assistant are queued in the **Hub**. They are injected into the next available 3-second heartbeat window to ensure the hardware never misses a command due to socket collisions.
 
-## Status
-Early development
-
-### Contolling AC units from Home Assistant
+### "Last Man Standing" Logic
+The **Coordinator** monitors the status of all zones. If an incoming packet indicates a zone has turned off, the Coordinator performs a full memory sweep of all zones. If it confirms that all zones are now closed, it proactively sends a system-wide `equip_mode: 0` command to shut down the master unit.
 
 
-### Issues
+## Setup & Installation
 
-        
-### Functionality / To-Do 
-See the [Issues List](https://github.com/rpanizzon/ge-smarttemp/issues) for a complete list of know issues/requests.
- - Hub
-     - [ ] do we do something about __heartbeat___? No, not until weather is issuing a response
-     - [ ] forcing a pair-key? How?
- - Coordinator
-     - [ ] Delayedr eaction to change of hvac modes
-     - [ ] Turn Controller off when all zones are off - delated turning off
+### 1. DNS Redirection (Required)
+The controller is hardcoded to look for `smarttempapp.com.au`. You must use a local DNS server (AdGuard Home, Pi-hole, or your router) to redirect this domain to your Home Assistant IP address.
 
- - Climate
-    - [ ] autoofftime, progen and ovrtime 
- - Sensors
-    - [ ] 
- - Documentation
- -     [ ]  Readme
- -     [ ]  Protocol Document
+### 2. Installation
+1. Copy `custom_components/smarttemp` into your HA `/config/custom_components/` directory.
+2. Restart Home Assistant.
+3. Go to **Settings → Devices & Services → Add Integration** and search for "SmartTemp".
+You should see entries appear in the integration. There should be 1 entry per zone/controller.
 
+## Protocol Overview
+The controller communicates via raw TCP on port 2223 (or your configured port).
+- **Handshake:** The connection begins with a `SUB` frame from the device, identifying its MAC address.
+- **Time Sync:** The device regularly requests `cmd: time`. The Hub responds with the current local time to keep the controller clock accurate.
+- **Data Structure:** State is shared via nested JSON objects (e.g., `sys_set`, `zone1`). The integration uses a deep-merge strategy to ensure partial updates do not overwrite existing data.l
 
-
- 
+## Limitations & To-Do
+- [x] **Heartbeats:** `__heartbeat__` messages are ignored to reduce log noise.
+- [x] **Master Shutdown:** Optimized for immediate response when the last zone closes.
+- [ ] **Weather Data:** Currently not implemented.
+- [ ] **Advanced Fields:** `autoofftime`, `progen`, and `ovrtime` are currently read-only.
