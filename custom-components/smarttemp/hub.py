@@ -68,7 +68,7 @@ class SmartTempHub:
             # Phase 2: We have JSON package  - Process JSON
             while True:
                 # Increased read size to attempt to catch the large AA6 pair_key
-                data = await asyncio.wait_for(reader.read(4096), timeout=12.0)
+                data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
                 if not data:
                     _LOGGER.debug(f"TRACE: {current_mac} closed the connection.")
                     break
