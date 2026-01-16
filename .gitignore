@@ -20,3 +20,5 @@ Forwarder/Full Trace/full_living.log
 /Forwarder/Full Trace
 Forwarder/guest_handshake.log
 Forwarder/guest_handshake.log
+Forwarder/smarttemp_hub.py
+Forwarder/smarttemp_server.py
