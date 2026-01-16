@@ -37,7 +37,7 @@ class SmartTempHub:
             self._serve_task = None
 
     async def handle_client(self, reader, writer):
-        """Sequential handler with high-resolution trace logging for debugging timeouts."""
+        """Sequential handler updated to match actual hardware 'SUB' behavior."""
         address = writer.get_extra_info('peername')
         _LOGGER.info(f"New connection from {address}")
         
@@ -45,43 +45,35 @@ class SmartTempHub:
         buffer = b""
 
         try:
-            # Phase 1: Handshake (Wait for SUB)
+            # Phase 1: Registration (Wait for SUB, but do NOT reply)
             while True:
-                # timeout for handshake
                 data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
                 if not data: break
-                
                 buffer += data
                                     
                 if buffer.startswith(SUB_FRAME_PREFIX) and b"\x0a" in buffer:
                     line_end = buffer.find(b"\x0a")
                     line = buffer[:line_end].decode('ascii').strip()
+                    # Extract MAC: "SUB 289C6E309AB3" -> "289C6E309AB3"
                     current_mac = line.split()[1]
                     
                     self.active_connections[current_mac] = writer
-                    await self.send_protocol_response(writer, "handshake")
                     
+                    # CRITICAL: We no longer call send_protocol_response here.
+                    # We just move to Phase 2.
                     buffer = buffer[line_end+1:]
-                    _LOGGER.info(f"Handshake complete for MAC: {current_mac}")
+                    _LOGGER.info(f"MAC {current_mac} registered. Awaiting data...")
                     break
             
-            # Phase 2: We have JSON package  - Process JSON
+            # Phase 2: Stitched JSON Processing
             while True:
-                # Increased read size to attempt to catch the large zoned pair_key
-                data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
-                if not data:
-                    _LOGGER.debug(f"TRACE: {current_mac} closed the connection.")
-                    break
-                
+                # Use a smaller read buffer if the device sends in 1024 chunks
+                data = await asyncio.wait_for(reader.read(2048), timeout=TIMEOUT_SECONDS)
+                if not data: break
                 buffer += data
-                _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
-                current_mac, len(data), len(buffer), buffer[:30])
-
+                
                 while b"{" in buffer:
                     start_index = buffer.find(b"{")
-                    
-                    # Log if we have junk leading data before the first bracket
-                    # This is probably __heartbeat__
                     if start_index > 0:
                         buffer = buffer[start_index:]
                         continue
@@ -89,57 +81,43 @@ class SmartTempHub:
                     bracket_count = 0
                     json_found = False
                     
-                    # Scan buffer for matching closing bracket
                     for i in range(len(buffer)):
                         if buffer[i] == ord("{"):
                             bracket_count += 1
                         elif buffer[i] == ord("}"):
                             bracket_count -= 1
                         
-                        if bracket_count == 0:
+                        # Root level closure check
+                        if bracket_count == 0 and i > 0:
                             json_bytes = buffer[:i+1]
                             try:
                                 payload = json.loads(json_bytes.decode('utf-8'))
-                                
-                                # ONLY call process_payload. 
-                                # DO NOT wrap this in async_create_task here.
                                 await self.process_payload(current_mac, payload, writer)
-                                
                                 buffer = buffer[i+1:]
                                 json_found = True
-                                break
-                            except json.JSONDecodeError as e:
-                                _LOGGER.error("TRACE [%s]: JSON Decode Error at byte %d: %s", current_mac, e.pos, e.msg)
-                                # Break and wait for more data to complete the fragment
                                 break 
+                            except json.JSONDecodeError:
+                                # This is where we catch those 1024/2048 seams
+                                _LOGGER.debug(
+                                    "TRACE [%s]: Nested/Seam '}' at byte %d. Continuing scan...", 
+                                    current_mac, i
+                                )
+                                continue
                     
                     if not json_found:
-                        _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
-                                      current_mac, bracket_count)
+                        if len(buffer) > 40960: # 40KB Safety
+                            _LOGGER.error("TRACE [%s]: Buffer overflow. Flushing.", current_mac)
+                            buffer = buffer[1:]
+                            continue
                         break
 
-        except asyncio.TimeoutError:
-            _LOGGER.warning(f"Device {current_mac} timed out.")
         except Exception as err:
-            _LOGGER.error(f"TRACE [%s]: Socket Error: %s", current_mac, err)
+            _LOGGER.error(f"TRACE [%s]: Connection lost: %s", current_mac, err)
         finally:
-            if current_mac:
-                self.active_connections.pop(current_mac, None)
-                
-                # Force the status to False
-                if self.coordinator:
-                    if current_mac not in self.coordinator.data:
-                        self.coordinator.data[current_mac] = {}
-                    
-                    self.coordinator.data[current_mac]["online"] = False
-                    self.coordinator.async_set_updated_data(self.coordinator.data)
-            
-            # 3. Socket Cleanup
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
+            if current_mac in self.active_connections:
+                del self.active_connections[current_mac]
+            writer.close()
+            await writer.wait_closed()
             
     async def process_payload(self, mac, payload, writer):
         """Process incoming JSON and respond with either a stacked command or an ACK."""
