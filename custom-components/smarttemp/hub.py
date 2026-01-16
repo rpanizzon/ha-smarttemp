@@ -47,7 +47,7 @@ class SmartTempHub:
         try:
             # Phase 1: Handshake (Wait for SUB)
             while True:
-                # 30s timeout for handshake
+                # timeout for handshake
                 data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
                 if not data: break
                 
@@ -67,15 +67,15 @@ class SmartTempHub:
             
             # Phase 2: We have JSON package  - Process JSON
             while True:
-                # Increased read size to attempt to catch the large AA6 pair_key
+                # Increased read size to attempt to catch the large zoned pair_key
                 data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
                 if not data:
                     _LOGGER.debug(f"TRACE: {current_mac} closed the connection.")
                     break
                 
                 buffer += data
-                # _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
-                #              current_mac, len(data), len(buffer), buffer[:30])
+                _LOGGER.debug("TRACE [%s]: Received %d bytes. Total Buffer: %d bytes. Starts with: %s", 
+                current_mac, len(data), len(buffer), buffer[:30])
 
                 while b"{" in buffer:
                     start_index = buffer.find(b"{")
@@ -109,17 +109,13 @@ class SmartTempHub:
                                 json_found = True
                                 break
                             except json.JSONDecodeError as e:
-                                _LOGGER.info("TRACE [%s]: JSON Error: %s", current_mac, e.msg)
-                                break
-    
-                            except json.JSONDecodeError as e:
                                 _LOGGER.error("TRACE [%s]: JSON Decode Error at byte %d: %s", current_mac, e.pos, e.msg)
                                 # Break and wait for more data to complete the fragment
                                 break 
                     
                     if not json_found:
-                        # _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
-                        #             current_mac, bracket_count)
+                        _LOGGER.debug("TRACE [%s]: Incomplete JSON. Brackets still open: %d. Waiting for next packet.", 
+                                      current_mac, bracket_count)
                         break
 
         except asyncio.TimeoutError:
