@@ -29,7 +29,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
             zone_count = int(payload.get("zone_no", self.data.get(mac, {}).get("zone_no", 0)))
             
             if mac not in self.data:
-                _LOGGER.info("MAC %s: New device detected. Initiating entity creation.", mac)
+                _LOGGER.debug("MAC %s: New device detected. Initiating entity creation.", mac)
                 if zone_count == 0:
                     self._check_and_signal(mac, 0)
                 else:
@@ -45,7 +45,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
             has_setpoints = "sys_set" in payload or "zone1" in payload
             
             if not has_setpoints:
-                _LOGGER.info("MAC %s: Part 1 pair_key. Fetching Part 2.", mac)
+                _LOGGER.debug("MAC %s: Part 1 pair_key. Fetching Part 2.", mac)
                 if zone_count == 0:
                     await self.hub.send_smarttemp_command(mac, {
                         "pair_key": "", 
@@ -66,28 +66,48 @@ class SmartTempCoordinator(DataUpdateCoordinator):
                 self.async_set_updated_data(self.data)
 
         else:
-            # Must be a normal JSON command
-            # Ensure mac exists in data AND is online before processing
-            device_entry = self.data.get(mac)
-            if device_entry and device_entry.get("online"):
-                _LOGGER.debug("MAC %s: Regular update received.", mac)
-                self._deep_merge(self.data[mac], payload)
+            # 5. REGULAR UPDATE
+            if mac in self.data and self.data[mac].get("online"):
+                # The merge returns True if a zone was turned OFF
+                should_check_off = self._deep_merge(self.data[mac], payload)
+                
+                if should_check_off:
+                    _LOGGER.debug("MAC %s: Zone OFF detected. Running Master-Off check.", mac)
+                    await self._check_system_off(mac)
+                
                 self.async_set_updated_data(self.data)
         return
       
     def _deep_merge(self, target, source):
-        """Recursively merge dictionary source into target."""
+        """
+        Deeply merge source into target.
+        Also, returns True ONLY if a zone 'onoff' was set to 0 (OFF).
+        """
+        zone_off_found = False
+        
         for key, value in source.items():
-            if isinstance(value, dict) and key in target and isinstance(target[key], dict):
-                self._deep_merge(target[key], value)
+            # Specifically check for a zone power-off event
+            if key == "onoff" and value == 0:
+                zone_off_found = True
+            
+            if (
+                key in target 
+                and isinstance(target[key], dict) 
+                and isinstance(value, dict)
+            ):
+                # OR the result with the recursive return to preserve it up the stack
+                if self._deep_merge(target[key], value):
+                    zone_off_found = True
             else:
                 target[key] = value
+                
+        return zone_off_found
 
     def _check_and_signal(self, mac, zone_index):
         """Signals HA to create entities via a tracked HA Task."""
         signal_key = f"{mac}_zone{zone_index}"
         if signal_key not in self.discovered_entities:
-            _LOGGER.info("MAC %s: Creating HA Task for zone %s discovery", mac, zone_index)
+            _LOGGER.debug("MAC %s: Creating HA Task for zone %s discovery", mac, zone_index)
             
             # Inner async function to bridge the gap
             async def trigger_discovery():
@@ -100,8 +120,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
                     
     def get_field(self, mac, field, default=None):
         """
-        Pure data fetcher. 
-        Supports root fields: 'temp_min'
+        Pure data fetcher. Supports root fields: 'temp_min'
         Supports nested fields: 'sys_set:heatset' or 'zone1:heatset'
         """
         device_data = self.data.get(mac, {})
@@ -121,7 +140,6 @@ class SmartTempCoordinator(DataUpdateCoordinator):
 
     def get_room_temp(self, mac, zone_idx):
         """
-        Single source for all temperature lookups.
         Zone 0 -> dis_room_temp[0]
         Zone 1+ -> dis_zone_temp[zone_idx]
         """
@@ -140,7 +158,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         val = self.data.get(mac, {}).get("dis_room_humi")
         return val[0] if val else 0
     
-    async def _check_system_off_logic(self, mac):
+    async def _check_system_off(self, mac):
         """Perform a full system sweep to see if we should shut down the master."""
         device_data = self.data.get(mac, {})
         equip_mode = device_data.get("equip_mode")
@@ -156,8 +174,5 @@ class SmartTempCoordinator(DataUpdateCoordinator):
                     break
             
             if not still_running:
-                _LOGGER.info("MAC %s: Full check confirmed all zones OFF. Shutting down Master.", mac)
-                # Dispatch shutdown command via Hub
-                self.hass.async_create_task(
-                    self.hub.send_smarttemp_command(mac, {"equip_mode": 0})
-                )
+                _LOGGER.info("MAC %s: All zones OFF. Shutting down Master.", mac)
+                await self.hub.send_smarttemp_command(mac, {"equip_mode": 0})

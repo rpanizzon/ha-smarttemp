@@ -98,7 +98,6 @@ class SmartTempHub:
                                 json_found = True
                                 break 
                             except json.JSONDecodeError:
-                                # This is where we catch those 1024/2048 seams
                                 _LOGGER.debug(
                                     "TRACE [%s]: Nested/Seam '}' at byte %d. Continuing scan...", 
                                     current_mac, i
@@ -107,7 +106,7 @@ class SmartTempHub:
                     
                     if not json_found:
                         if len(buffer) > 8192: # 8KB - longer than any valid payload
-                            _LOGGER.error("TRACE [%s]: Buffer overflow. Flushing.", current_mac)
+                            _LOGGER.warning("TRACE [%s]: Buffer overflow. Flushing.", current_mac)
                             buffer = buffer[1:]
                             continue
                         break
@@ -115,10 +114,26 @@ class SmartTempHub:
         except Exception as err:
             _LOGGER.error(f"TRACE [%s]: Connection lost: %s", current_mac, err)
         finally:
-            if current_mac in self.active_connections:
-                del self.active_connections[current_mac]
+            if current_mac:
+                _LOGGER.warning("MAC %s: Connection lost/closed. Cleaning up.", current_mac)
+                if current_mac in self.active_connections:
+                    del self.active_connections[current_mac]
+                
+                # RE-INTEGRATE: Notify coordinator of offline status
+                if self.coordinator:
+                    if current_mac not in self.coordinator.data:
+                        self.coordinator.data[current_mac] = {}
+                    
+                    self.coordinator.data[current_mac]["online"] = False
+                    # This push is what tells HA to grey out the entities
+                    self.coordinator.async_set_updated_data(self.coordinator.data)
+
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                # Prevent errors if writer is already broken
+                pass
             
     async def process_payload(self, mac, payload, writer):
         """Process incoming JSON and respond with either a stacked command or an ACK."""
@@ -168,7 +183,7 @@ class SmartTempHub:
                 "temp_max": "", "temp_min": "", 
                 "dis_room_temp": "", "dis_room_humi": "", "dis_zone_temp": "", 
                 "equip_mode": "", "fan_mode": "", "fan_speed": "",
-                ""
+                "local_time": now.strftime("%Y%m%d%H%M"),
                 "MsgID": now.strftime("%Y%m%d%H%M%S")
                 }
         # Consistent response format for both handshake and time requests
