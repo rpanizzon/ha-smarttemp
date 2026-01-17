@@ -16,57 +16,88 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         self.discovered_entities = set()
 
     async def async_process_json(self, mac, payload):
-        """Process incoming JSON with gated availability and logic checks."""
-        # 1. Gated Handshake: Initialization via pair_key
+        """
+        Refined 2-Phase Logic:
+        1. If pair_key: Register entities, merge data, and decide between fetching Part 2 or Activating.
+        2. If regular JSON: Merge and refresh only if entities already exist.
+        """
+        _LOGGER.debug("Processing payload for %s: %s", mac, payload)
+
         if "pair_key" in payload:
+            # 1. Registration: Is this a new device?
+            # Get zone_count outside the conditional so it is always available
+            zone_count = int(payload.get("zone_no", self.data.get(mac, {}).get("zone_no", 0)))
+            
             if mac not in self.data:
-                self.data[mac] = {}
+                _LOGGER.info("MAC %s: New device detected. Initiating entity creation.", mac)
+                if zone_count == 0:
+                    self._check_and_signal(mac, 0)
+                else:
+                    for i in range(1, zone_count + 1):
+                        self._check_and_signal(mac, i)
+                # Initialize with online=False so regular updates are ignored until Activation
+                self.data[mac] = {"online": False, "zone_no": zone_count}
             
-            self.data[mac]["online"] = True
+            # 2. Merge Data 
+            self._deep_merge(self.data[mac], payload)    
             
-            zone_count = payload.get("zone_no", 0)
-            if zone_count > 0:
-                for i in range(1, zone_count + 1):
-                    self._check_and_signal(mac, i)
+            # 3. Check if it's Part 1 (no setpoints)
+            has_setpoints = "sys_set" in payload or "zone1" in payload
+            
+            if not has_setpoints:
+                _LOGGER.info("MAC %s: Part 1 pair_key. Fetching Part 2.", mac)
+                if zone_count == 0:
+                    await self.hub.send_smarttemp_command(mac, {
+                        "pair_key": "", 
+                        "sys_set": {"heatset": "", "coolset": ""}
+                    })
+                else:
+                    # Includes zoneX_name to restore zone names 
+                    zone_query = {"pair_key": ""}
+                    for i in range(1, zone_count + 1):
+                        zone_query[f"zone{i}"] = {"onoff": "", "heatset": "", "coolset": ""}
+                        zone_query[f"zone{i}_name"] = "" 
+                    await self.hub.send_smarttemp_command(mac, zone_query)
             else:
-                self._check_and_signal(mac, 0)
+                # 4. Activation: Must be a full or Part 2 pair_key
+                if not self.data[mac].get("online"):
+                    _LOGGER.info("MAC %s: Full/Part 2 received. Activating.", mac)
+                    self.data[mac]["online"] = True
+                self.async_set_updated_data(self.data)
 
-        # 2. Block processing if we haven't received a pair_key yet
-        if not self.data.get(mac, {}).get("online"):
-            return
-
-        # 3. Data Processing and "Off" Event Detection
-        any_zone_turned_off = False
-        
-        for key, value in payload.items():
-            # Deep merge logic
-            if isinstance(value, dict) and key in self.data[mac] and isinstance(self.data[mac][key], dict):
-                self.data[mac][key].update(value)
+        else:
+            # Must be a normal JSON command
+            # Ensure mac exists in data AND is online before processing
+            device_entry = self.data.get(mac)
+            if device_entry and device_entry.get("online"):
+                _LOGGER.debug("MAC %s: Regular update received.", mac)
+                self._deep_merge(self.data[mac], payload)
+                self.async_set_updated_data(self.data)
+        return
+      
+    def _deep_merge(self, target, source):
+        """Recursively merge dictionary source into target."""
+        for key, value in source.items():
+            if isinstance(value, dict) and key in target and isinstance(target[key], dict):
+                self._deep_merge(target[key], value)
             else:
-                self.data[mac][key] = value
+                target[key] = value
 
-            # Running check: Did this payload contain a zone turning off?
-            if key.startswith("zone") and isinstance(value, dict):
-                if value.get("onoff") == 0:
-                    any_zone_turned_off = True
-
-        # 4. Final state push to HA
-        self.async_set_updated_data(self.data)
-
-        # 5. System Off Logic: Triggered by a zone turn-off event or pair_key update
-        if any_zone_turned_off:
-            # We perform a full memory check to verify the 'Last Man Standing'
-            await self._check_system_off_logic(mac)
+    def _check_and_signal(self, mac, zone_index):
+        """Signals HA to create entities via a tracked HA Task."""
+        signal_key = f"{mac}_zone{zone_index}"
+        if signal_key not in self.discovered_entities:
+            _LOGGER.info("MAC %s: Creating HA Task for zone %s discovery", mac, zone_index)
             
-    def _check_and_signal(self, mac, zone_idx):
-        """Signal MAC + Zone Index once per entity."""
-        entity_key = f"{mac}_{zone_idx}"
-        if entity_key not in self.discovered_entities:
-            # Only logs once per entity creation
-            _LOGGER.info("Creating entity: MAC %s, Zone %s", mac, zone_idx)
-            self.discovered_entities.add(entity_key)
-            async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, (mac, zone_idx))
+            # Inner async function to bridge the gap
+            async def trigger_discovery():
+                async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, mac, zone_index)
+
+            # THE FIX: Create a tracked task on the HA loop
+            self.hass.async_create_task(trigger_discovery())
             
+            self.discovered_entities.add(signal_key)
+                    
     def get_field(self, mac, field, default=None):
         """
         Pure data fetcher. 

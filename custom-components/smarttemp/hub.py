@@ -45,26 +45,27 @@ class SmartTempHub:
         buffer = b""
 
         try:
-            # Phase 1: Registration (Wait for SUB, but do NOT reply)
+            # Phase 1: Registration (Wait for SUB,reply with partial pair_key)
             while True:
-                data = await asyncio.wait_for(reader.read(4096), timeout=TIMEOUT_SECONDS)
+                data = await asyncio.wait_for(reader.read(2048), timeout=TIMEOUT_SECONDS)
                 if not data: break
                 buffer += data
                                     
                 if buffer.startswith(SUB_FRAME_PREFIX) and b"\x0a" in buffer:
                     line_end = buffer.find(b"\x0a")
                     line = buffer[:line_end].decode('ascii').strip()
-                    # Extract MAC: "SUB 289C6E309AB3" -> "289C6E309AB3"
                     current_mac = line.split()[1]
                     
+                    # Registration (Always overwrite with the latest writer)
                     self.active_connections[current_mac] = writer
                     
-                    # CRITICAL: We no longer call send_protocol_response here.
-                    # We just move to Phase 2.
+                    # Step 1: Issue Discovery immediately on SUB
+                    await self.send_protocol_response(writer, "discovery")
+                    
+                    _LOGGER.info("MAC %s: Received SUB. Discovery Stage 1 issued.", current_mac)
                     buffer = buffer[line_end+1:]
-                    _LOGGER.info(f"MAC {current_mac} registered. Awaiting data...")
-                    break
-            
+                    break # Transition to the JSON processing loop
+                
             # Phase 2: Stitched JSON Processing
             while True:
                 # Use a smaller read buffer if the device sends in 1024 chunks
@@ -105,7 +106,7 @@ class SmartTempHub:
                                 continue
                     
                     if not json_found:
-                        if len(buffer) > 40960: # 40KB Safety
+                        if len(buffer) > 8192: # 8KB - longer than any valid payload
                             _LOGGER.error("TRACE [%s]: Buffer overflow. Flushing.", current_mac)
                             buffer = buffer[1:]
                             continue
@@ -161,15 +162,24 @@ class SmartTempHub:
     async def send_protocol_response(self, writer, resp_type):
         """Send standardized JSON response for SUB and cmd:time."""
         now = datetime.now()
-        
+        if resp_type == "discovery":
+            payload = {
+                "pair_key": "", "zone_no": "", 
+                "temp_max": "", "temp_min": "", 
+                "dis_room_temp": "", "dis_room_humi": "", "dis_zone_temp": "", 
+                "equip_mode": "", "fan_mode": "", "fan_speed": "",
+                ""
+                "MsgID": now.strftime("%Y%m%d%H%M%S")
+                }
         # Consistent response format for both handshake and time requests
-        data = {
-            "local_time": now.strftime("%Y%m%d%H%M"),
-            "MsgID": (now + timedelta(hours=TIME_ADJUST)).strftime("%Y%m%d%H%M%S")
-        }
-
+        else:
+            payload = {
+                "local_time": now.strftime("%Y%m%d%H%M"),
+                "MsgID": (now + timedelta(hours=TIME_ADJUST)).strftime("%Y%m%d%H%M%S")
+            }
+            
         try:
-            resp = json.dumps(data, separators=(',', ':')).encode('ascii')
+            resp = json.dumps(payload, separators=(',', ':')).encode('ascii')
             writer.write(resp)
             await writer.drain()
             _LOGGER.debug("Sent %s response", resp_type)

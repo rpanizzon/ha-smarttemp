@@ -15,20 +15,24 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up SmartTemp sensors via discovery signal."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    entry_id = entry.entry_id # Capture this for the callback
 
-    def async_add_smarttemp_sensors(discovery_info):
-        """Callback to add sensors for a specific MAC and Zone Index."""
-        mac, zone_idx = discovery_info
+    async def async_add_smarttemp_sensors(mac, zone_idx):
+        """Callback when coordinator signals (mac, zone_idx)."""
+        _LOGGER.info("Adding sensors for MAC %s Zone %s", mac, zone_idx)
         
-        entities = [
-            SmartTempTemperatureSensor(coordinator, entry.entry_id, mac, zone_idx),
-            SmartTempHumiditySensor(coordinator, entry.entry_id, mac, zone_idx)
+        # 1. Create the list of entities
+        # Note: We must include entry_id to match your Class __init__
+        new_sensors = [
+            SmartTempTemperatureSensor(coordinator, entry_id, mac, zone_idx),
+            SmartTempHumiditySensor(coordinator, entry_id, mac, zone_idx)
         ]
 
-        _LOGGER.info("Adding sensors for MAC %s Zone %s", mac, zone_idx)
-        # Use add_job to stay safe with the event loop
-        hass.add_job(async_add_entities, entities)
+        # 2. Add them directly. Since the Coordinator used add_job to 
+        # trigger this signal, we are now safely back in the main event loop.
+        async_add_entities(new_sensors)
 
+    # Register the listener
     entry.async_on_unload(
         async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_smarttemp_sensors)
     )
@@ -36,15 +40,21 @@ async def async_setup_entry(hass, entry, async_add_entities):
 class SmartTempTemperatureSensor(CoordinatorEntity, SensorEntity):
     """Temperature sensor using consolidated coordinator logic."""
 
+    # This signature must match exactly how you call it above
     def __init__(self, coordinator, entry_id, mac, zone_idx):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._mac = mac
         self._zone_idx = zone_idx
         
+        # Correctly building unique_id using entry_id and zone
         suffix = "temp" if zone_idx == 0 else f"zone{zone_idx}_temp"
         self._attr_unique_id = f"{entry_id}_{mac}_{suffix}"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, mac)}, name=f"SmartTemp {mac}")
+        
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, mac)}, 
+            name=f"SmartTemp {mac}"
+        )
         
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_state_class = SensorStateClass.MEASUREMENT
