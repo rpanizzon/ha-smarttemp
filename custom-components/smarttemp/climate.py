@@ -22,17 +22,15 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     hub = hass.data[DOMAIN][entry.entry_id]["hub"]
 
-    def async_add_smarttemp_entity(discovery_info):
+    async def async_add_smarttemp_entity(mac, zone_idx):
         """Callback when coordinator signals (mac, zone_idx)."""
-        mac, zone_idx = discovery_info
         
         _LOGGER.info("Adding entity for MAC %s Index %s", mac, zone_idx)
         
         # Create the entity object
         new_entity = SmartTempZone(coordinator, hub, entry.entry_id, mac, zone_idx)
         
-        # FIX: Use hass.add_job to ensure async_add_entities runs in the correct loop context
-        hass.add_job(async_add_entities, [new_entity])
+        async_add_entities([new_entity])
 
     # Listen for signals
     entry.async_on_unload(
@@ -77,16 +75,6 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             pass
         return None
 
-    @property
-    def extra_state_attributes(self):
-        """Return device-specific state attributes."""
-        parent_key = "sys_set" if self._zone_idx == 0 else f"zone{self._zone_idx}"
-        return {
-            "program_enable": self.coordinator.get_field(self._mac, f"{parent_key}:progen"),
-            "override_time": self.coordinator.get_field(self._mac, f"{parent_key}:ovrdtime"),
-            "auto_off_time": self.coordinator.get_field(self._mac, f"{parent_key}:autoofftime"),
-        }
-    
     @property
     def name(self):
         """Return 'SmartTemp System' for Guest or the hardware name for Lounge zones."""
@@ -239,10 +227,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             # Non-Zoned / System command uses "sys_set"
             payload["sys_set"] = {
                 "heatset": h_set,
-                "coolset": c_set,
-                "progen": self.coordinator.get_field(self._mac, "sys_set:progen", 0),
-                "ovrdtime": self.coordinator.get_field(self._mac, "sys_set:ovrdtime", 0),
-                "autoofftime": self.coordinator.get_field(self._mac, "sys_set:autoofftime", -1)
+                "coolset": c_set
             }
         else:
             # ZONE ENTITY: Only toggles its own damper/onoff status
@@ -254,10 +239,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             payload[f"zone{self._zone_idx}"] = {
                 "onoff": 1 if proto_mode != 0 else 0, # Use local onoff logic
                 "heatset": h_set,
-                "coolset": c_set,
-                "progen": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:progen", 0),
-                "ovrdtime": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:ovrdtime", 0),
-                "autoofftime": self.coordinator.get_field(self._mac, f"zone{self._zone_idx}:autoofftime", -1)
+                "coolset": c_set
             }
 
         await self.hub.send_smarttemp_command(self._mac, payload)
