@@ -25,7 +25,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async def async_add_smarttemp_entity(mac, zone_idx):
         """Callback when coordinator signals (mac, zone_idx)."""
         
-        _LOGGER.info("Adding entity for MAC %s Index %s", mac, zone_idx)
+        _LOGGER.info("MAC %s: Adding entity for Index %s", mac, zone_idx)
         
         # Create the entity object
         new_entity = SmartTempZone(coordinator, hub, entry.entry_id, mac, zone_idx)
@@ -165,7 +165,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
     
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
-        _LOGGER.debug(f"Climate {self._mac} set_hvac_mode: {hvac_mode}")
+        _LOGGER.debug(f"TRACE: Climate {self._mac} set_hvac_mode: {hvac_mode}")
         
         # We pass the new mode to the bundler. 
         # The bundler will pull the current temperatures from 'self' automatically.
@@ -189,7 +189,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             FAN_HIGH: 3
         }
         val = mapping.get(fan_mode, 0)
-        _LOGGER.debug("Setting fan speed to %s (value: %s)", fan_mode, val)
+        _LOGGER.debug("TRACE: Setting fan speed to %s (value: %s)", fan_mode, val)
         await self.hub.send_smarttemp_command(self._mac, {"fan_speed": val})
 
     async def async_set_preset_mode(self, preset_mode):

@@ -21,7 +21,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         1. If pair_key: Register entities, merge data, and decide between fetching Part 2 or Activating.
         2. If regular JSON: Merge and refresh only if entities already exist.
         """
-        _LOGGER.debug("Processing payload for %s: %s", mac, payload)
+        _LOGGER.debug("TRACE [%s]: Processing payload: %s", mac, payload)
 
         if "pair_key" in payload:
             # 1. Registration: Is this a new device?
@@ -29,7 +29,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
             zone_count = int(payload.get("zone_no", self.data.get(mac, {}).get("zone_no", 0)))
             
             if mac not in self.data:
-                _LOGGER.debug("MAC %s: New device detected. Initiating entity creation.", mac)
+                _LOGGER.debug("TRACE [%s]: New device detected. Initiating entity creation.", mac)
                 if zone_count == 0:
                     self._check_and_signal(mac, 0)
                 else:
@@ -45,7 +45,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
             has_setpoints = "sys_set" in payload or "zone1" in payload
             
             if not has_setpoints:
-                _LOGGER.debug("MAC %s: Part 1 pair_key. Fetching Part 2.", mac)
+                _LOGGER.debug("TRACE [%s]: Part 1 pair_key. Fetching Part 2.", mac)
                 if zone_count == 0:
                     await self.hub.send_smarttemp_command(mac, {
                         "pair_key": "", 
@@ -72,7 +72,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
                 should_check_off = self._deep_merge(self.data[mac], payload)
                 
                 if should_check_off:
-                    _LOGGER.debug("MAC %s: Zone OFF detected. Running Master-Off check.", mac)
+                    _LOGGER.debug("TRACE [%s]: Zone OFF detected. Running Master-Off check.", mac)
                     await self._check_system_off(mac)
                 
                 self.async_set_updated_data(self.data)
@@ -107,7 +107,7 @@ class SmartTempCoordinator(DataUpdateCoordinator):
         """Signals HA to create entities via a tracked HA Task."""
         signal_key = f"{mac}_zone{zone_index}"
         if signal_key not in self.discovered_entities:
-            _LOGGER.debug("MAC %s: Creating HA Task for zone %s discovery", mac, zone_index)
+            _LOGGER.debug("TRACE [%s]: Creating HA Task for zone %s discovery", mac, zone_index)
             
             # Inner async function to bridge the gap
             async def trigger_discovery():

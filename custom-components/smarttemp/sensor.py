@@ -19,7 +19,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     async def async_add_smarttemp_sensors(mac, zone_idx):
         """Callback when coordinator signals (mac, zone_idx)."""
-        _LOGGER.info("Adding sensors for MAC %s Zone %s", mac, zone_idx)
+        _LOGGER.info("MAC %s: Adding sensors for Zone %s", mac, zone_idx)
         
         # 1. Create the list of entities
         # Note: We must include entry_id to match your Class __init__
