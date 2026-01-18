@@ -3,9 +3,10 @@
 DOMAIN = "smarttemp"
 
 # Connection Constants
-DEFAULT_PORT = 2223  # 
-HEARTBEAT_PAYLOAD = "__heartbeat__\n"  
-SUB_FRAME_PREFIX = "SUB"  # [cite: 5]
+DEFAULT_PORT = 2223  #
+BUFFER_LIMIT = 8096  # bytes 
+HEARTBEAT_PAYLOAD = b"__heartbeat__\n"  
+SUB_FRAME_PREFIX = b"SUB "  
 TIMEOUT_SECONDS = 30.0  # seconds for read timeouts
 
 # Protocol Scaling
