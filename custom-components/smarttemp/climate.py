@@ -1,5 +1,9 @@
 import logging
-from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate import (
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACMode,
+)
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
@@ -59,7 +63,9 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             ClimateEntityFeature.TARGET_TEMPERATURE | 
             ClimateEntityFeature.TARGET_TEMPERATURE_RANGE | 
             ClimateEntityFeature.FAN_MODE |
-            ClimateEntityFeature.PRESET_MODE
+            ClimateEntityFeature.PRESET_MODE |
+            ClimateEntityFeature.TURN_OFF |  
+            ClimateEntityFeature.TURN_ON   
         )
         self._attr_preset_modes = ["Auto Fan", "Continuous Fan"]
 
@@ -170,6 +176,15 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
         # We pass the new mode to the bundler. 
         # The bundler will pull the current temperatures from 'self' automatically.
         await self._send_bundled_command(hvac_mode=hvac_mode)
+    
+    async def async_turn_off(self) -> None:
+        """Turn the entity off."""
+        await self.async_set_hvac_mode(HVACMode.OFF)
+
+    async def async_turn_on(self) -> None:
+        """Turn the entity on."""
+        # You can default to AUTO or the last known state
+        await self.async_set_hvac_mode(HVACMode.AUTO)    
 
     async def async_set_temperature(self, **kwargs):
         """Pack temperature payload using the bundling helper."""
