@@ -151,7 +151,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             return None  # This forces the UI to use the High/Low sliders
         if self.hvac_mode == HVACMode.COOL:
             return self.target_temperature_high
-        return self.target_temperature_low
+        return self.target_temperature_high
     
     @property
     def min_temp(self):
