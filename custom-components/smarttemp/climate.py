@@ -231,10 +231,22 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
             elif target_hvac == HVACMode.COOL:
                 c_val = temp
 
+        # Ensure heat is always at least 1.0 degree below cool
+        if h_val is not None and c_val is not None:
+            if h_val > (c_val - 1.0):
+                _LOGGER.debug("Deadband conflict: Adjusting setpoints for hardware compliance")
+                # If we are adjusting HEAT (or in HEAT mode), push COOL up
+                if temp_low is not None or target_hvac == HVACMode.HEAT:
+                    c_val = h_val + 1.0
+                # If we are adjusting COOL (or in COOL mode), push HEAT down
+                else:
+                    h_val = c_val - 1.0
+
+        # 3. Convert to scaled integers for hardware
         h_set = int((h_val or 20.0) * TEMP_SCALE_FACTOR)
         c_set = int((c_val or 30.0) * TEMP_SCALE_FACTOR)
 
-        # 3. Construct Payload with equip_mode at the beginning
+        # 4. Construct Payload with equip_mode at the beginning
         payload = {}
 
         if self._zone_idx == 0:
@@ -257,4 +269,7 @@ class SmartTempZone(CoordinatorEntity, ClimateEntity):
                 "coolset": c_set
             }
 
+        # 3. Dispatch to Hub
         await self.hub.send_smarttemp_command(self._mac, payload)
+
+        self.async_write_ha_state() 
