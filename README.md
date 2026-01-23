@@ -1,5 +1,5 @@
 # SmartTemp Inspire Touch Air Conditioner controller - HA Custom Component
-Home Assistant custom component that creates a local alternate server for the Smarttemp Inspire Touch (replaces `smarttempapp.com.au`). 
+Home Assistant custom component that creates a local alternate server for the Smarttemp Inspire Touch (SMT-775) Controller (replaces `smarttempapp.com.au`). 
 This was developed by analysing the tcp traffic between the smarttemp controller and the cloud based server `smarttempapp.com.au`.
 By redirecting traffic locally, you gain faster response times, remove cloud dependency, and enable advanced automation logic through Home Assitant. In addition, all other Home Assistant features, such as Google Assist is available (i.e "hay google, turn on the bedroom Air Conditioner")
 >***Note***, this integration replaces the cloud based server with Home Assistant, making the Smarttemp app unable to access the controller and therefore unusable. Use Home Assistant app instead.
