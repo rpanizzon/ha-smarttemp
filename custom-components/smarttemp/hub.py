@@ -113,6 +113,8 @@ class SmartTempHub:
                                 # Update Coordinator state
                                 if self.coordinator:
                                     await self.coordinator.async_process_json(mac, payload)
+                                    # UI refresh trigger
+                                    self.coordinator.async_set_updated_data(self.coordinator.data)
                                 
                                 # Process responses (Queued commands or ACK)
                                 await self._respond_to_controller(mac, writer, payload)
