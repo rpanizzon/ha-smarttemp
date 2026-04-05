@@ -29,6 +29,14 @@ The **Coordinator** monitors the status of all zones. If an incoming packet indi
 #### 1. DNS Redirection (Required)
 The controller is hardcoded to look for `smarttempapp.com.au`. You must use a local DNS server (AdGuard Home, Pi-hole, or your router) to redirect this domain to your Home Assistant IP address.
 ### 2. Installation
+#### 2.1 Using HACS
+1. Go to HACS in Home Assistant and click on the 3-dot menu (top-right)
+2. Select Custom repositories.
+3. Paste the GitHub URL of "https://github.com/rpanizzon/ha-smarttemp" and select the category of "Integration"
+4. The component will now appear in HACS for you to download following the standard steps. 
+5. Restart Home Assistant
+6. Go to **Settings → Devices & Services → Add Integration** and search for "SmartTemp".
+#### 2.2 Manual
 1. Copy `custom_components/smarttemp` into your HA `/config/custom_components/` directory.
 2. Restart Home Assistant.
 3. Go to **Settings → Devices & Services → Add Integration** and search for "SmartTemp".
