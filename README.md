@@ -28,6 +28,9 @@ The **Coordinator** monitors the status of all zones. If an incoming packet indi
 
 #### 1. DNS Redirection (Required)
 The controller is hardcoded to look for `smarttempapp.com.au`. You must use a local DNS server (AdGuard Home, Pi-hole, or your router) to redirect this domain to your Home Assistant IP address.
+An option if you are running HA in supervisor or "Home Assistant OS" is to install Adguard Home through the Add-on Store. Once installed, and operational go to:
+Filters > DNS Rewrites > and add  `smarttempapp.com.au` with the ip address of Home Assistant.
+
 ### 2. Installation
 #### 2.1 Using HACS
 1. Go to HACS in Home Assistant and click on the 3-dot menu (top-right)
