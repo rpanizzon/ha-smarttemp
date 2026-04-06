@@ -1,7 +1,7 @@
 # SmartTemp Inspire Touch Air Conditioner controller - HA Custom Component
 Home Assistant custom component that creates a local alternate server for the Smarttemp Inspire Touch (SMT-775) Controller (replaces `smarttempapp.com.au`). 
 This was developed by analysing the tcp traffic between the smarttemp controller and the cloud based server `smarttempapp.com.au`.
-By redirecting traffic locally, you gain faster response times, remove cloud dependency, and enable advanced automation logic through Home Assitant. In addition, all other Home Assistant features, such as Google Assist is available (i.e "hay google, turn on the bedroom Air Conditioner")
+By redirecting traffic locally, you gain faster response times, remove cloud dependency, and enable advanced automation logic through Home Assistant. In addition, all other Home Assistant features, such as Google Assist is available (i.e "hay google, turn on the bedroom Air Conditioner")
 >***Note***, this integration replaces the cloud based server with Home Assistant, making the Smarttemp app unable to access the controller and therefore unusable. Use Home Assistant app instead.
 
 ## Features
@@ -11,11 +11,11 @@ By redirecting traffic locally, you gain faster response times, remove cloud dep
 - **Smart Master Shutdown:** Automatically turns off the master unit when the last active zone is closed.
 
 ## How it Works (The Logic)
-The custom component consits of 4 parts:
-- **hub.py:** simulates the as the server `smarttempapp.com.au`. Establishes connection to the controller(s), packages JSON payloads and sends them to the coordinator. Recieves commands from the coordinator to sendto the controller.
-- **coordinator.py:** On reception of a valid JSON (if necessary) create the entities, and update the values from the controller for use by climate and sensor. Passes on commands from climate to the hub.
+The custom component consists of 4 parts:
+- **hub.py:** simulates the server `smarttempapp.com.au`. Establishes connection to the controller(s), packages JSON payloads and sends them to the coordinator. Recieves commands from the coordinator to send to the controller.
+- **coordinator.py:** On reception of a valid JSON (if necessary) creates the entities, and then updates the values from the controller for use by climate and sensor. Passes on commands from climate to the hub.
 - **climante.py:** Updates climate based information and returns commands to the coordinator
-- **sensor.py:** maintains the room temperature and hubidity sensors for each zone.
+- **sensor.py:** maintains the room temperature and humidity sensors for each zone.
 To ensure stability with the SmartTemp hardware protocol, the integration uses specific logic gates:
 #### Online Gating & Discovery
 The integration remains in an "Unavailable" state until a complete `pair_key` payload is received. To achieve this in a timely manner, the hub prompts for partial pair_key data on initiation. Based on the response, the hub will prompt for the remaining data.
@@ -34,7 +34,7 @@ Filters > DNS Rewrites > and add  `smarttempapp.com.au` with the ip address of H
 ### 2. Installation
 #### 2.1 Using HACS
 1. Go to HACS in Home Assistant and click on the 3-dot menu (top-right)
-2. Select Custom repositories.
+2. Select Custom Repositories.
 3. Paste the GitHub URL of "https://github.com/rpanizzon/ha-smarttemp" and select the category of "Integration"
 4. The component will now appear in HACS for you to download following the standard steps. 
 5. Restart Home Assistant
@@ -51,6 +51,6 @@ The controller communicates via raw TCP on port 2223 (or your configured port).
 - **Data Structure:** State is shared via nested JSON objects (e.g., `sys_set`, `zone1`). The integration uses a deep-merge strategy to ensure partial updates do not overwrite existing data.
 
 ## Limitations & To-Do
-- [ ] **Weather:** The SmartTemp server is currently not supporting this function, so cannot determine protocol.
+- [ ] **Weather:** The SmartTemp server is currently not supporting this function, so I cannot determine the protocol.
 - [ ] **Scheduling** Best supported by Home Assitant functionality
 - [ ] **Advanced Fields:** `autoofftime`, `progen`, and `ovrtime`. Best supported by Home Assistant functionality

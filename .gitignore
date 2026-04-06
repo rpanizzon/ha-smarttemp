@@ -1,24 +1,14 @@
-Documentation/Dictionary.xlsx
-Documentation/.DS_Store
-Documentation/Dictionary.xlsx
+# Ignore OS Generated files
+.DS_Store
+.gitattributes
+
+# Data and Logs
 *.xlsx
+Documentation/Dictionary.xlsx
 Forwarder/smarttemp_handshake.log
-Forwarder/.DS_Store
-Documentation/Dictionary.xlsx
-custom-components/smarttemp/climate.py.old.py
-custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
-custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
-custom-components/smarttemp/__pycache__/climate.cpython-314.pyc
-Documentation/Dictionary.xlsx
-Forwarder/full_guest.log
-Forwarder/full_living.log
-Forwarder/smarttemp_handshake1.log
-Forwarder/smarttemp_handshake2.log
-Forwarder/Changing equip_mode not always working.log
-Forwarder/Full Trace/full_guest.log
-Forwarder/Full Trace/full_living.log
-/Forwarder/Full Trace
-Forwarder/guest_handshake.log
-Forwarder/guest_handshake.log
-Forwarder/smarttemp_hub.py
-Forwarder/smarttemp_server.py
+
+#Python dytecode
+**/__pycache__/
+*.py[cod]
+
+# Directories
