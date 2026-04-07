@@ -89,6 +89,7 @@ entities:
   - entity: input_number.climate_off_guest
     name: Guest Room Timer
 ```
+*Tip: Make the lovelace Tile card configuration only visible when the AC is on.*
 ## Troubleshooting
 - **Timer doesn't stop:** If you manually turn the AC off, the timer will still run and eventually try to send the "off" command again. This is harmless.
 - **Manual Override:** To cancel a timer, simply move the slider back to 0. (The automation condition > 0 will prevent it from starting a new wait).
