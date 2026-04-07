@@ -55,4 +55,4 @@ The controller communicates via raw TCP on port 2223 (or your configured port).
 - [ ] **Scheduling** Best supported by Home Assitant functionality
 - [ ] **Advanced Fields:** `autoofftime`, `progen`, and `ovrtime`. Best supported by Home Assistant functionality[^1]
 
-[^1]: [Here](./Auto_off.md) is my Automation to turn the AC off after a defined number of hours.
+[^1]: See file [Auto_off.md](https://github.com/rpanizzon/ha-smarttemp/blob/main/Auto_off.md) for my Automation to turn the AC off after a defined number of hours.
