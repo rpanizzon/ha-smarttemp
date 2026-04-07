@@ -13,7 +13,7 @@ You need to create an input_number helper for every room you want to control.
 1. Go to Settings > Devices & Services > Helpers.
 2. Click Create Helper > Number.
 3. Use the following settings for each room:
-    * Name: Climate Off Living (and so on)
+    * Name: Climate Off xxxx (where xxxx is the controller for this helper (e.g living, master or guest))
     * Minimum value: 0
     * Maximum value: 12 (or your preferred max hours)
     * Step size: 1
@@ -47,9 +47,9 @@ actions:
   - variables:
       hours: "{{ states(trigger.entity_id) | int }}"
       climate_map:
-        input_number.climate_off_living: climate.living_room
-        input_number.climate_off_master: climate.master_bedroom
-        input_number.climate_off_guest: climate.smarttemp_system
+        input_number.climate_off_living: climate.living_room # or the name of the AC controller for this input number
+        input_number.climate_off_master: climate.master_bedroom # or the name of the contoller for this input number
+        input_number.climate_off_guest: climate.smarttemp_system # or the name of this controller for this input number
   
   # Wait for the number of hours selected on the slider
   - delay:
