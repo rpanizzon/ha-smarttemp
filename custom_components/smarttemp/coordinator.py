@@ -106,6 +106,10 @@ class SmartTempCoordinator(DataUpdateCoordinator):
     def _check_and_signal(self, mac, zone_index):
         """Signals HA to create entities via a tracked HA Task."""
         signal_key = f"{mac}_zone{zone_index}"
+        
+        _LOGGER.debug("TRACE [%s]: _check_and_signal called for zone %s. Discovered set: %s", 
+                 mac, zone_index, self.discovered_entities)
+        
         if signal_key not in self.discovered_entities:
             _LOGGER.debug("TRACE [%s]: Creating HA Task for zone %s discovery", mac, zone_index)
             
@@ -113,10 +117,10 @@ class SmartTempCoordinator(DataUpdateCoordinator):
             async def trigger_discovery():
                 async_dispatcher_send(self.hass, NEW_DEVICE_SIGNAL, mac, zone_index)
 
-            # THE FIX: Create a tracked task on the HA loop
             self.hass.async_create_task(trigger_discovery())
-            
             self.discovered_entities.add(signal_key)
+        else:
+            _LOGGER.debug("TRACE [%s]: Signal already sent previously for zone %s. Skipping.", mac, zone_index)
                     
     def get_field(self, mac, field, default=None):
         """

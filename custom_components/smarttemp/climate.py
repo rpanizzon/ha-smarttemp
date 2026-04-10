@@ -22,21 +22,38 @@ from .const import DOMAIN, NEW_DEVICE_SIGNAL, TEMP_SCALE_FACTOR, TIMEOUT_SECONDS
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up SmartTemp entities via discovery signal."""
+    """Set up SmartTemp entities."""
+    _LOGGER.debug("TRACE: climate.py: async_setup_entry started")
+    
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     hub = hass.data[DOMAIN][entry.entry_id]["hub"]
 
-    async def async_add_smarttemp_entity(mac, zone_idx):
-        """Callback when coordinator signals (mac, zone_idx)."""
+    # Temporary Trace catch-up logic
+    if coordinator.data:
+        _LOGGER.debug("TRACE: climate.py: Catch-up check found %s devices in coordinator", len(coordinator.data))
+    else:
+        _LOGGER.debug("TRACE: climate.py: Catch-up check found NO data in coordinator yet")
+    
+    # 1. CATCH-UP: Check what the coordinator already knows
+    if coordinator.data:
+        _LOGGER.debug("Found existing data for %s devices. Creating initial entities.", len(coordinator.data))
+        initial_entities = []
+        for mac, device_data in coordinator.data.items():
+            zone_count = device_data.get("zone_no", 0)
+            if zone_count == 0:
+                initial_entities.append(SmartTempZone(coordinator, hub, entry.entry_id, mac, 0))
+            else:
+                for i in range(1, zone_count + 1):
+                    initial_entities.append(SmartTempZone(coordinator, hub, entry.entry_id, mac, i))
         
-        _LOGGER.info("MAC %s: Adding entity for Index %s", mac, zone_idx)
-        
-        # Create the entity object
-        new_entity = SmartTempZone(coordinator, hub, entry.entry_id, mac, zone_idx)
-        
-        async_add_entities([new_entity])
+        if initial_entities:
+            async_add_entities(initial_entities)
 
-    # Listen for signals
+    # 2. FUTURE: Listen for devices discovered after this moment
+    async def async_add_smarttemp_entity(mac, zone_idx):
+        _LOGGER.info("New discovery signal for MAC %s: Adding entity", mac)
+        async_add_entities([SmartTempZone(coordinator, hub, entry.entry_id, mac, zone_idx)])
+
     entry.async_on_unload(
         async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_smarttemp_entity)
     )

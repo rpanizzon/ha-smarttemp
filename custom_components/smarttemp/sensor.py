@@ -15,24 +15,37 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up SmartTemp sensors via discovery signal."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    entry_id = entry.entry_id # Capture this for the callback
+    entry_id = entry.entry_id
 
-    async def async_add_smarttemp_sensors(mac, zone_idx):
-        """Callback when coordinator signals (mac, zone_idx)."""
-        _LOGGER.info("MAC %s: Adding sensors for Zone %s", mac, zone_idx)
+    # --- CATCH-UP LOGIC ---
+    if coordinator.data:
+        _LOGGER.debug("TRACE: Sensor platform catch-up. Checking %s devices", len(coordinator.data))
+        initial_sensors = []
+        for mac, device_data in coordinator.data.items():
+            zone_count = device_data.get("zone_no", 0)
+            
+            # Determine which zones to create sensors for
+            indices = [0] if zone_count == 0 else range(1, zone_count + 1)
+            
+            for idx in indices:
+                initial_sensors.extend([
+                    SmartTempTemperatureSensor(coordinator, entry_id, mac, idx),
+                    SmartTempHumiditySensor(coordinator, entry_id, mac, idx)
+                ])
         
-        # 1. Create the list of entities
-        # Note: We must include entry_id to match your Class __init__
+        if initial_sensors:
+            _LOGGER.debug("TRACE: Adding %s initial sensors", len(initial_sensors))
+            async_add_entities(initial_sensors)
+
+    # --- FUTURE DISCOVERY ---
+    async def async_add_smarttemp_sensors(mac, zone_idx):
+        _LOGGER.debug("TRACE [%s]: Signal RECEIVED in sensor.py for zone %s", mac, zone_idx)
         new_sensors = [
             SmartTempTemperatureSensor(coordinator, entry_id, mac, zone_idx),
             SmartTempHumiditySensor(coordinator, entry_id, mac, zone_idx)
         ]
-
-        # 2. Add them directly. Since the Coordinator used add_job to 
-        # trigger this signal, we are now safely back in the main event loop.
         async_add_entities(new_sensors)
 
-    # Register the listener
     entry.async_on_unload(
         async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_smarttemp_sensors)
     )
