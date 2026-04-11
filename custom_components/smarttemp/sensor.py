@@ -17,34 +17,33 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     entry_id = entry.entry_id
 
-    # --- CATCH-UP LOGIC ---
+    def _create_sensors(mac, zone_idx):
+        """Create temperature and humidity sensors for a zone."""
+        return [
+            SmartTempTemperatureSensor(coordinator, entry_id, mac, zone_idx),
+            SmartTempHumiditySensor(coordinator, entry_id, mac, zone_idx)
+        ]
+
+    # Catch-up: Create sensors for existing devices
     if coordinator.data:
         _LOGGER.debug("TRACE: Sensor platform catch-up. Checking %s devices", len(coordinator.data))
-        initial_sensors = []
-        for mac, device_data in coordinator.data.items():
-            zone_count = device_data.get("zone_no", 0)
-            
-            # Determine which zones to create sensors for
-            indices = [0] if zone_count == 0 else range(1, zone_count + 1)
-            
-            for idx in indices:
-                initial_sensors.extend([
-                    SmartTempTemperatureSensor(coordinator, entry_id, mac, idx),
-                    SmartTempHumiditySensor(coordinator, entry_id, mac, idx)
-                ])
-        
+        initial_sensors = [
+            sensor
+            for mac, device_data in coordinator.data.items()
+            for zone_idx in (
+                [0] if device_data.get("zone_no", 0) == 0 
+                else range(1, device_data.get("zone_no", 0) + 1)
+            )
+            for sensor in _create_sensors(mac, zone_idx)
+        ]
         if initial_sensors:
             _LOGGER.debug("TRACE: Adding %s initial sensors", len(initial_sensors))
             async_add_entities(initial_sensors)
 
-    # --- FUTURE DISCOVERY ---
+    # Future discovery: Listen for newly discovered devices
     async def async_add_smarttemp_sensors(mac, zone_idx):
         _LOGGER.debug("TRACE [%s]: Signal RECEIVED in sensor.py for zone %s", mac, zone_idx)
-        new_sensors = [
-            SmartTempTemperatureSensor(coordinator, entry_id, mac, zone_idx),
-            SmartTempHumiditySensor(coordinator, entry_id, mac, zone_idx)
-        ]
-        async_add_entities(new_sensors)
+        async_add_entities(_create_sensors(mac, zone_idx))
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, NEW_DEVICE_SIGNAL, async_add_smarttemp_sensors)
